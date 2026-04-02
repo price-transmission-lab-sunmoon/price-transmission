@@ -1,0 +1,35 @@
+# =============================================================
+# price-transmission 프로젝트 의존성
+# 신청서 기준 버전 + Phase 0 데이터 수집에 필요한 패키지
+# =============================================================
+
+# --- 데이터 처리 ---
+pandas>=2.0,<3.0
+numpy>=1.26
+
+# --- 계량경제학 (Phase 2~4: 검정, VAR/VECM, IRF) ---
+statsmodels>=0.14,<1.0
+scipy>=1.11,<2.0
+
+# --- 구조 변화 탐지 (Phase 6: Bai-Perron) ---
+ruptures>=1.1,<2.0
+
+# --- ML 보조 교차검증 (Phase 7-ML) ---
+scikit-learn>=1.4,<2.0
+
+# --- 시각화 ---
+matplotlib>=3.7,<4.0
+seaborn>=0.13,<1.0
+
+# --- 데이터 수집 (Phase 0: API 호출) ---
+requests>=2.31,<3.0
+python-dotenv>=1.0,<2.0
+
+# --- Jupyter 탐색적 분석 ---
+jupyter>=1.0
+jupyterlab>=4.0
+
+# --- 유틸리티 ---
+openpyxl>=3.1          # Excel 파일 읽기 (World Bank Pink Sheet)
+xlrd>=2.0              # 구버전 .xls 파일 지원
+tqdm>=4.65             # 진행률 표시
