@@ -1,0 +1,310 @@
+{
+  "_meta": {
+    "version": "2.0.0",
+    "created": "2026-04-02",
+    "updated": "2026-04-03",
+    "description": "품목 매핑 테이블: 7개 데이터 소스 간 품목 코드 연결",
+    "notes": [
+      "v2.0.0: ECOS/환율/KAMIS API 검증 완료, pending → confirmed/unavailable 업데이트",
+      "KAMIS: 밀가루·식용유·옥수수 관련 품목 미존재 확인 → 구간 C·D 분석 제외",
+      "관세청 수입단가: HS 4자리 기준 확정, 6자리 세부는 다운로드 시 확인 예정",
+      "ECOS PPI/CPI: 월별 데이터 코드 확정 (YYYYMM 형식 기간 기준으로 선택)"
+    ]
+  },
+
+  "commodities": [
+    {
+      "commodity_id": "wheat",
+      "name_kr": "밀",
+      "name_en": "Wheat",
+
+      "sources": {
+        "worldbank_pinksheet": {
+          "column_name": "Wheat, US HRW",
+          "description": "Wheat (U.S.), no. 2 hard red winter Gulf export price",
+          "unit": "$/mt",
+          "frequency": "monthly",
+          "status": "confirmed"
+        },
+
+        "fao_ffpi": {
+          "index_name": "Cereals Price Index",
+          "description": "FAO 곡물 가격지수 (밀 단일 품목 아님, 교차검증용)",
+          "unit": "index (2014-2016=100)",
+          "frequency": "monthly",
+          "status": "confirmed",
+          "note": "품목군 지수이므로 직접 가격 비교 불가. 추세 교차검증용으로만 활용"
+        },
+
+        "customs_import_price": {
+          "hs_code_4digit": "1001",
+          "hs_code_detail": [
+            {"code": "1001.19", "name": "기타 밀(듀럼밀 제외)"},
+            {"code": "1001.99", "name": "기타(종자용 제외)"}
+          ],
+          "description": "관세청 HS코드 기준 수입단가",
+          "frequency": "monthly",
+          "status": "confirmed",
+          "note": "HS 4자리(1001) 기준 수집. 6자리 세부는 다운로드 시 확인"
+        },
+
+        "exchange_rate": {
+          "source": "한국수출입은행 API",
+          "pair": "USD/KRW",
+          "description": "일별 매매기준율 → 월평균 집계",
+          "frequency": "daily → monthly avg",
+          "status": "confirmed",
+          "note": "전 품목 공통 사용. API 검증 완료 (2026-04-02 기준 1,507.8)"
+        },
+
+        "ecos_ppi": {
+          "stat_code": "404Y014",
+          "item_code": "301131AA",
+          "item_name": "제분",
+          "description": "ECOS 생산자물가지수 > 제분",
+          "unit": "2020=100",
+          "frequency": "monthly",
+          "data_range": "196501~202602",
+          "status": "confirmed"
+        },
+
+        "ecos_cpi": {
+          "stat_code": "901Y009",
+          "item_code": "A01108",
+          "item_name": "밀가루",
+          "description": "ECOS 소비자물가지수 > 밀가루",
+          "unit": "2020=100",
+          "frequency": "monthly",
+          "data_range": "197501~202602",
+          "status": "confirmed",
+          "alternatives": [
+            {"code": "A01110", "name": "라면", "range": "197501~202602"},
+            {"code": "A01116", "name": "빵", "range": "198001~202602"},
+            {"code": "A01109", "name": "국수", "range": "197501~202602"}
+          ]
+        },
+
+        "kamis_wholesale": {
+          "status": "unavailable",
+          "note": "KAMIS에 밀가루·제분 관련 도매가 품목 미존재 확인 (2026-04-03)",
+          "impact": "구간 C(PPI→도매가), 구간 D(도매가→CPI) 분석 제외"
+        }
+      },
+
+      "downstream_products": [
+        {"name": "밀가루", "stage": "PPI(제분) / CPI(밀가루)"},
+        {"name": "빵류", "stage": "CPI 대안 (A01116)"},
+        {"name": "라면", "stage": "CPI 대안 (A01110)"}
+      ],
+
+      "price_transmission_path": {
+        "segment_A": {"upstream": "worldbank_pinksheet (원화 환산)", "downstream": "customs_import_price", "status": "active"},
+        "segment_B": {"upstream": "customs_import_price", "downstream": "ecos_ppi (제분)", "status": "active"},
+        "segment_C": {"status": "excluded", "reason": "KAMIS 도매가 미존재"},
+        "segment_D": {"status": "excluded", "reason": "KAMIS 도매가 미존재"}
+      }
+    },
+
+    {
+      "commodity_id": "maize",
+      "name_kr": "옥수수",
+      "name_en": "Maize (Corn)",
+
+      "sources": {
+        "worldbank_pinksheet": {
+          "column_name": "Maize",
+          "description": "Maize (U.S.), no. 2, yellow, f.o.b. US Gulf ports",
+          "unit": "$/mt",
+          "frequency": "monthly",
+          "status": "confirmed"
+        },
+
+        "fao_ffpi": {
+          "index_name": "Cereals Price Index",
+          "description": "FAO 곡물 가격지수 (교차검증용, 밀과 동일 지수)",
+          "unit": "index (2014-2016=100)",
+          "frequency": "monthly",
+          "status": "confirmed",
+          "note": "품목군 지수이므로 직접 가격 비교 불가"
+        },
+
+        "customs_import_price": {
+          "hs_code_4digit": "1005",
+          "hs_code_detail": [
+            {"code": "1005.90", "name": "기타 옥수수(종자용 제외)"}
+          ],
+          "description": "관세청 HS코드 기준 수입단가",
+          "frequency": "monthly",
+          "status": "confirmed",
+          "note": "HS 4자리(1005) 기준 수집"
+        },
+
+        "exchange_rate": {
+          "source": "한국수출입은행 API",
+          "pair": "USD/KRW",
+          "description": "전 품목 공통",
+          "status": "confirmed"
+        },
+
+        "ecos_ppi": {
+          "stat_code": "404Y014",
+          "item_code": "301181AA",
+          "item_name": "사료",
+          "description": "ECOS 생산자물가지수 > 사료",
+          "unit": "2020=100",
+          "frequency": "monthly",
+          "data_range": "196501~202602",
+          "status": "confirmed",
+          "note": "배합사료가 옥수수 가격 전달의 주요 하류 품목 (신청서 그림2 참조)"
+        },
+
+        "ecos_cpi": {
+          "stat_code": "901Y009",
+          "item_code": "A01203",
+          "item_name": "돼지고기",
+          "description": "ECOS 소비자물가지수 > 돼지고기 (사료→축산 간접 경로)",
+          "unit": "2020=100",
+          "frequency": "monthly",
+          "data_range": "197501~202602",
+          "status": "confirmed",
+          "note": "옥수수→배합사료→축산물 간접 전달 경로. Granger 인과 검정으로 유효성 검증 필요",
+          "alternatives": [
+            {"code": "A01204", "name": "닭고기", "range": "197501~202602"},
+            {"code": "A01405", "name": "달걀", "range": "197501~202602"}
+          ]
+        },
+
+        "kamis_wholesale": {
+          "status": "unavailable",
+          "note": "KAMIS에 옥수수·전분·사료 관련 도매가 품목 미존재 확인 (2026-04-03)",
+          "impact": "구간 C·D 분석 제외"
+        }
+      },
+
+      "downstream_products": [
+        {"name": "배합사료", "stage": "PPI (사료, 301181AA)"},
+        {"name": "돼지고기", "stage": "CPI 간접 전달 (A01203)"},
+        {"name": "닭고기", "stage": "CPI 대안 (A01204)"},
+        {"name": "달걀", "stage": "CPI 대안 (A01405)"}
+      ],
+
+      "price_transmission_path": {
+        "segment_A": {"upstream": "worldbank_pinksheet (원화 환산)", "downstream": "customs_import_price", "status": "active"},
+        "segment_B": {"upstream": "customs_import_price", "downstream": "ecos_ppi (사료)", "status": "active"},
+        "segment_C": {"status": "excluded", "reason": "KAMIS 도매가 미존재"},
+        "segment_D": {"status": "excluded", "reason": "KAMIS 도매가 미존재"}
+      }
+    },
+
+    {
+      "commodity_id": "soybean",
+      "name_kr": "대두",
+      "name_en": "Soybean",
+
+      "sources": {
+        "worldbank_pinksheet": {
+          "column_name": "Soybeans",
+          "description": "Soybeans, U.S. Soybeans, FOB U.S. Gulf",
+          "unit": "$/mt",
+          "frequency": "monthly",
+          "status": "confirmed"
+        },
+
+        "fao_ffpi": {
+          "index_name": "Vegetable Oils Price Index",
+          "description": "FAO 식물성유 가격지수 (대두유 포함, 교차검증용)",
+          "unit": "index (2014-2016=100)",
+          "frequency": "monthly",
+          "status": "confirmed",
+          "note": "대두유뿐 아니라 팜유 등 포함. 추세 교차검증용"
+        },
+
+        "customs_import_price": {
+          "hs_code_4digit": "1201",
+          "hs_code_detail": [
+            {"code": "1201.90", "name": "기타 대두(종자용 제외)"}
+          ],
+          "description": "관세청 HS코드 기준 수입단가",
+          "frequency": "monthly",
+          "status": "confirmed",
+          "note": "HS 4자리(1201) 기준 수집"
+        },
+
+        "exchange_rate": {
+          "source": "한국수출입은행 API",
+          "pair": "USD/KRW",
+          "description": "전 품목 공통",
+          "status": "confirmed"
+        },
+
+        "ecos_ppi": {
+          "stat_code": "404Y014",
+          "item_code": "301162AA",
+          "item_name": "유지",
+          "description": "ECOS 생산자물가지수 > 유지",
+          "unit": "2020=100",
+          "frequency": "monthly",
+          "data_range": "196501~202602",
+          "status": "confirmed"
+        },
+
+        "ecos_cpi": {
+          "stat_code": "901Y009",
+          "item_code": "A01502",
+          "item_name": "식용유",
+          "description": "ECOS 소비자물가지수 > 식용유",
+          "unit": "2020=100",
+          "frequency": "monthly",
+          "data_range": "197501~202602",
+          "status": "confirmed",
+          "alternatives": [
+            {"code": "A01112", "name": "두부", "range": "197501~202602"},
+            {"code": "A01905", "name": "간장", "range": "197501~202602"},
+            {"code": "A01906", "name": "된장", "range": "197501~202602"}
+          ]
+        },
+
+        "kamis_wholesale": {
+          "status": "unavailable",
+          "note": "KAMIS에 수입 대두·식용유 도매가 미존재. 국산 콩(141)은 있으나 수입 대두와 별개 시장 (2026-04-03)",
+          "impact": "구간 C·D 분석 제외"
+        }
+      },
+
+      "downstream_products": [
+        {"name": "식용유(대두유)", "stage": "PPI(유지) / CPI(식용유)"},
+        {"name": "두부", "stage": "CPI 대안 (A01112)"},
+        {"name": "된장·간장", "stage": "CPI 대안 (A01905, A01906)"}
+      ],
+
+      "price_transmission_path": {
+        "segment_A": {"upstream": "worldbank_pinksheet (원화 환산)", "downstream": "customs_import_price", "status": "active"},
+        "segment_B": {"upstream": "customs_import_price", "downstream": "ecos_ppi (유지)", "status": "active"},
+        "segment_C": {"status": "excluded", "reason": "KAMIS 도매가 미존재"},
+        "segment_D": {"status": "excluded", "reason": "KAMIS 도매가 미존재"}
+      }
+    }
+  ],
+
+  "_template_for_new_commodity": {
+    "commodity_id": "새 품목 영문 ID",
+    "name_kr": "한글명",
+    "name_en": "English name",
+    "sources": {
+      "worldbank_pinksheet": {"column_name": "", "description": "", "unit": "$/mt", "status": "pending"},
+      "fao_ffpi": {"index_name": "", "description": "", "status": "pending"},
+      "customs_import_price": {"hs_code_4digit": "", "hs_code_detail": [], "status": "pending"},
+      "exchange_rate": {"source": "한국수출입은행 API", "pair": "USD/KRW", "status": "confirmed"},
+      "ecos_ppi": {"stat_code": "404Y014", "item_code": "", "item_name": "", "status": "pending"},
+      "ecos_cpi": {"stat_code": "901Y009", "item_code": "", "item_name": "", "status": "pending"},
+      "kamis_wholesale": {"status": "pending"}
+    },
+    "downstream_products": [],
+    "price_transmission_path": {
+      "segment_A": {"upstream": "", "downstream": "", "status": "pending"},
+      "segment_B": {"upstream": "", "downstream": "", "status": "pending"},
+      "segment_C": {"status": "pending"},
+      "segment_D": {"status": "pending"}
+    }
+  }
+}
