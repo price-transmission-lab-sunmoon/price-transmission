@@ -58,10 +58,10 @@ cp .env.example .env
 `.env` 파일을 열어서 실제 API 키를 입력합니다.
 
 ```
-ECOS_API_KEY=팀_공유_키
-EXIM_API_KEY=팀_공유_키
-KAMIS_CERT_KEY=발급_후_입력
-KAMIS_CERT_ID=발급_후_입력
+ECOS_API_KEY=
+EXIM_API_KEY=
+KAMIS_CERT_KEY=
+KAMIS_CERT_ID=
 ```
 
 > **주의**: `.env` 파일은 `.gitignore`에 포함되어 있어 GitHub에 올라가지 않습니다.  
@@ -142,7 +142,7 @@ price-transmission/
 │   └── settings.py       ← 파이프라인 파라미터 (신청서 기준값)
 ├── notebooks/            ← Jupyter 탐색 분석
 ├── docs/                 ← 문서
-├── tests/                ← 테스트
+├── tests/                ← 테스트 용 파일 위치. 각각의 테스트 파일 최상단에 간단한 요약 적기
 ├── .env                  ← API 키 (git 추적 안 됨)
 ├── .env.example          ← API 키 템플릿
 ├── .gitignore
@@ -154,27 +154,27 @@ price-transmission/
 
 ## 핵심 라이브러리 버전
 
-| 패키지 | 버전 | 용도 |
-|--------|------|------|
-| pandas | ≥ 2.0 | 데이터 처리 |
-| numpy | ≥ 1.26 | 수치 연산 |
-| statsmodels | ≥ 0.14 | VAR/VECM, ADF/KPSS, IRF, Johansen |
-| scipy | ≥ 1.11 | 통계 검정, Wald 검정 |
-| ruptures | ≥ 1.1 | Bai-Perron 구조 변화 탐지 |
-| scikit-learn | ≥ 1.4 | Isolation Forest, LOF, One-Class SVM |
-| matplotlib | ≥ 3.7 | 시각화 |
-| seaborn | ≥ 0.13 | 분포·히트맵 시각화 |
-| requests | ≥ 2.31 | API 호출 |
-| python-dotenv | ≥ 1.0 | .env 파일 로드 |
-| openpyxl | ≥ 3.1 | Excel 파일 읽기 |
+| 패키지        | 버전   | 용도                                 |
+| ------------- | ------ | ------------------------------------ |
+| pandas        | ≥ 2.0  | 데이터 처리                          |
+| numpy         | ≥ 1.26 | 수치 연산                            |
+| statsmodels   | ≥ 0.14 | VAR/VECM, ADF/KPSS, IRF, Johansen    |
+| scipy         | ≥ 1.11 | 통계 검정, Wald 검정                 |
+| ruptures      | ≥ 1.1  | Bai-Perron 구조 변화 탐지            |
+| scikit-learn  | ≥ 1.4  | Isolation Forest, LOF, One-Class SVM |
+| matplotlib    | ≥ 3.7  | 시각화                               |
+| seaborn       | ≥ 0.13 | 분포·히트맵 시각화                   |
+| requests      | ≥ 2.31 | API 호출                             |
+| python-dotenv | ≥ 1.0  | .env 파일 로드                       |
+| openpyxl      | ≥ 3.1  | Excel 파일 읽기                      |
 
 ---
 
 ## API 키 발급처
 
-| API | 발급 URL | 비고 |
-|-----|---------|------|
-| ECOS (한국은행) | https://ecos.bok.or.kr → Open API → 인증키 신청 | 회원가입 시 자동 발급 |
-| 한국수출입은행 | https://www.koreaexim.go.kr/ir/HPHKIR020M01?apino=2&viewtype=C | 본인인증 후 즉시 발급 |
-| KAMIS | https://www.kamis.or.kr → Open-API 사용신청 | cert_key + cert_id 두 개 필요 |
-| 관세청 | https://unipass.customs.go.kr | API 키 불필요 (Excel 다운로드) |
+| API             | 발급 URL                                                       | 비고                           |
+| --------------- | -------------------------------------------------------------- | ------------------------------ |
+| ECOS (한국은행) | https://ecos.bok.or.kr → Open API → 인증키 신청                | 회원가입 시 자동 발급          |
+| 한국수출입은행  | https://www.koreaexim.go.kr/ir/HPHKIR020M01?apino=2&viewtype=C | 본인인증 후 즉시 발급          |
+| KAMIS           | https://www.kamis.or.kr → Open-API 사용신청                    | cert_key + cert_id 두 개 필요  |
+| 관세청          | https://unipass.customs.go.kr                                  | API 키 불필요 (Excel 다운로드) |
