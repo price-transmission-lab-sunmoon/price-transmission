@@ -29,6 +29,14 @@ HS_TO_COMMODITY = {
     "1001": "wheat",
     "1005": "maize",
     "1201": "soybean",
+    "1511": "palmoil",
+    "1701": "sugar",
+    "0901": "coffee",
+    "0201": "beef",
+    "0202": "beef",
+    "1202": "groundnuts",
+    "0803": "banana",
+    "0805": "orange",
 }
 
 
@@ -96,9 +104,9 @@ def parse_single_excel(filepath):
     # 총계 행 제거
     df = df[df["period"].astype(str).str.match(r"^\d{4}\.\d{2}$", na=False)].copy()
     
-    # HS코드 변환 (float 1001.0 → 문자열 "1001")
+    # HS코드 변환 (float 1001.0 → 문자열 "1001", 4자리 zero-padding)
     df["hs_code"] = df["hs_code"].apply(
-        lambda x: str(int(x)) if pd.notna(x) and str(x) != 'nan' else ""
+        lambda x: str(int(x)).zfill(4) if pd.notna(x) and str(x) != 'nan' else ""
     )
     
     # 우리가 필요한 HS코드만 필터링
@@ -179,6 +187,24 @@ def parse_all_customs():
     
     # 전체 합치기
     result = pd.concat(all_dfs, ignore_index=True)
+    # 쇠고기(0201+0202) 합산: 같은 월의 중량·금액을 더한 뒤 단가 재계산
+    beef = result[result["commodity_id"] == "beef"]
+    others = result[result["commodity_id"] != "beef"]
+    
+    if not beef.empty:
+        beef_merged = beef.groupby(["date", "commodity_id"]).agg(
+            hs_code=("hs_code", "first"),
+            import_weight=("import_weight", "sum"),
+            import_value=("import_value", "sum"),
+        ).reset_index()
+        beef_merged["hs_code"] = "0201-0202"
+        mask = beef_merged["import_weight"] > 0
+        beef_merged["import_unit_price"] = None
+        beef_merged.loc[mask, "import_unit_price"] = (
+            beef_merged.loc[mask, "import_value"] * 1_000_000 / beef_merged.loc[mask, "import_weight"]
+        )
+        result = pd.concat([others, beef_merged], ignore_index=True)
+    
     result = result.drop_duplicates(subset=["date", "commodity_id"])
     result = result.sort_values(["commodity_id", "date"]).reset_index(drop=True)
     
