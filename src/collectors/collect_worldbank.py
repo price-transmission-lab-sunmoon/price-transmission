@@ -195,6 +195,10 @@ def parse_pink_sheet(excel_path):
         
         # 2000년 이후만
         subset = subset[subset["date"] >= "2000-01-01"]
+        # 단위 변환: $/kg → $/mt (×1000)
+        kg_items = {"coffee", "banana", "orange", "beef", "sugar"}
+        if cid in kg_items:
+            subset["value"] = subset["value"] * 1000
         
         for _, row in subset.iterrows():
             records.append({
