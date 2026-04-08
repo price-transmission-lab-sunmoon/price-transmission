@@ -137,8 +137,8 @@ def collect_exchange_rate(start_year=2000, end_date=None):
         if months_processed % 24 == 0:
             print(f"  진행 중: {year}-{month:02d} ({months_processed}/{total_months})")
         
-        # API 호출 리미트 때문에 월 2회로 변경
-        sample_days = [ 15, 25 ]
+        # API 호출 리미트 때문에 월 2회로 변경 했었다가 월 5회로 확대, 2회로 나누어 진행(04.06기준)
+        sample_days = [1, 7, 13, 19, 25]
         
         for day in sample_days:
             try:
@@ -179,6 +179,10 @@ def collect_exchange_rate(start_year=2000, end_date=None):
     
     # 일별 원본 저장
     daily_path = RAW_DIR / "exchange_rate_daily.csv"
+    if daily_path.exists():
+        existing = pd.read_csv(daily_path, parse_dates=["date"])
+        df = pd.concat([existing, df], ignore_index=True)
+        df = df.drop_duplicates(subset=["date"]).sort_values("date").reset_index(drop=True)
     df.to_csv(daily_path, index=False, encoding="utf-8-sig")
     print(f"\n  💾 일별 원본 저장: {daily_path} ({len(df)}건)")
     
@@ -213,4 +217,11 @@ def collect_exchange_rate(start_year=2000, end_date=None):
 
 
 if __name__ == "__main__":
-    collect_exchange_rate()
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--start", type=int, default=2000)
+    parser.add_argument("--end-year", type=int, default=None)
+    args = parser.parse_args()
+    
+    end = date(args.end_year, 12, 31) if args.end_year else None
+    collect_exchange_rate(start_year=args.start, end_date=end)
