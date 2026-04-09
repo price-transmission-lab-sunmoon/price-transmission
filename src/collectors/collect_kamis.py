@@ -1,14 +1,31 @@
 """
-KAMIS 도매가 수집기
+KAMIS 도매가 수집기 v3
 ==============================================
-수집 대상: 쇠고기, 땅콩, 바나나, 오렌지 월별 도매가
-API: periodProductList (품목코드 직접 지정)
-실행 방법: python src/collectors/collect_kamis.py
+수집 대상: 쇠고기, 땅콩, 바나나, 오렌지 월별 도매가(중도매인 판매가격)
+API: monthlySalesList
 
-주의:
-- dailyPriceByCategoryList는 부류 필터가 작동하지 않음 (식량작물만 반환)
-- periodProductList로 품목코드를 직접 지정해야 정상 조회됨
-- 조회 기간이 최대 1년이므로 연도별로 순회하여 수집
+변경 이력:
+  v1: periodProductList 사용 → 과거 데이터 조회 불가 문제
+  v2: 재시도 로직 추가 → 근본 원인 미해결
+  v3: monthlySalesList로 전환, 품목 코드 수정
+
+핵심 발견사항:
+  - periodProductList는 최근 데이터만 반환 (과거 조회 불가)
+  - monthlySalesList는 p_yyyy 기준 과거 데이터 조회 가능
+  - 품목 코드가 API마다 다름 (monthlySalesList 기준 코드 사용)
+    바나나: 418 (dailyPrice에서는 416=단감)
+    오렌지: 421 (dailyPrice에서는 420=파인애플)
+    땅콩:   314 (dailyPrice에서는 313=들깨)
+    쇠고기: 512 (dailyPrice에서는 511=데이터없음)
+
+monthlySalesList 응답 구조:
+  - price 배열 안에 productclscode별 블록
+  - productclscode "02" = 중도매인 판매가격 (도매)
+  - 각 블록에 item 배열 → 연도별 m1~m12 월별 가격
+  - p_period=3 → 기준연도 포함 4개년 반환
+  - caption으로 품목명/품종/등급/단위 확인 가능
+
+실행: python src/collectors/collect_kamis.py
 """
 
 import os
@@ -36,76 +53,82 @@ RAW_DIR.mkdir(parents=True, exist_ok=True)
 
 BASE_URL = "http://www.kamis.or.kr/service/price/xml.do"
 
-
 # ============================================================
-# 매핑 파일에서 KAMIS 수집 대상 읽기
+# monthlySalesList 기준 품목 코드 (검증 완료)
 # ============================================================
-def load_kamis_targets():
-    """commodity_mapping.json에서 KAMIS 도매가 수집 대상 추출"""
-    mapping_path = PROJECT_ROOT / "config" / "commodity_mapping.json"
-
-    if not mapping_path.exists():
-        print(f"❌ 매핑 파일 없음: {mapping_path}")
-        sys.exit(1)
-
-    with open(mapping_path, "r", encoding="utf-8") as f:
-        mapping = json.load(f)
-
-    targets = []
-    for commodity in mapping.get("commodities", []):
-        kamis = commodity.get("sources", {}).get("kamis_wholesale", {})
-        if kamis.get("status") == "confirmed" and kamis.get("item_code"):
-            targets.append({
-                "commodity_id": commodity["commodity_id"],
-                "name_kr": commodity["name_kr"],
-                "category_code": kamis["category_code"],
-                "item_code": kamis["item_code"],
-                "item_name": kamis.get("item_name", ""),
-            })
-
-    return targets
+KAMIS_TARGETS = [
+    {
+        "commodity_id": "groundnuts",
+        "name_kr": "땅콩",
+        "category_code": "300",
+        "item_code": "314",       # monthlySalesList 기준
+        "target_caption_keyword": "땅콩",
+    },
+    {
+        "commodity_id": "banana",
+        "name_kr": "바나나",
+        "category_code": "400",
+        "item_code": "418",       # monthlySalesList 기준
+        "target_caption_keyword": "바나나",
+    },
+    {
+        "commodity_id": "orange",
+        "name_kr": "오렌지",
+        "category_code": "400",
+        "item_code": "421",       # monthlySalesList 기준
+        "target_caption_keyword": "오렌지",
+    },
+]
 
 
 # ============================================================
 # API 호출
 # ============================================================
-def fetch_period_prices(category_code, item_code, start_day, end_day, cls_code="01"):
+def fetch_monthly(cat_code, item_code, yyyy, period="3", max_retries=3):
     """
-    periodProductList API로 기간별 도매가 조회
+    monthlySalesList API 호출
 
     Parameters
     ----------
-    category_code : str  부류코드 (예: "500")
-    item_code : str      품목코드 (예: "511")
-    start_day : str      시작일 (예: "2020-01-01")
-    end_day : str        종료일 (예: "2020-12-31")
-    cls_code : str       "01"=도매, "02"=소매
+    cat_code : str   부류코드
+    item_code : str  품목코드 (monthlySalesList 기준)
+    yyyy : str       기준 연도
+    period : str     "1"=1년, "2"=2년, "3"=3년 (기준연도 포함 N+1개년 반환)
+
+    Returns
+    -------
+    dict or None : API 응답 전체, 실패 시 None
     """
     params = {
-        "action": "periodProductList",
+        "action": "monthlySalesList",
         "p_cert_key": CERT_KEY,
         "p_cert_id": CERT_ID,
         "p_returntype": "json",
-        "p_product_cls_code": cls_code,
-        "p_country_code": "1101",
-        "p_startday": start_day,
-        "p_endday": end_day,
+        "p_yyyy": yyyy,
+        "p_period": period,
+        "p_itemcategorycode": cat_code,
+        "p_itemcode": item_code,
+        "p_kindcode": "",
+        "p_graderank": "",
+        "p_countycode": "1101",
         "p_convert_kg_yn": "Y",
-        "p_item_category_code": category_code,
-        "p_item_code": item_code,
-        "p_kind_code": "",
-        "p_product_rank_code": "",
     }
 
-    try:
-        resp = requests.get(BASE_URL, params=params, timeout=30)
-        data = resp.json()
-    except Exception as e:
-        print(f"      ❌ API 호출 실패: {e}")
-        return []
-
-    items = data.get("data", {}).get("item", [])
-    return items
+    for attempt in range(1, max_retries + 1):
+        try:
+            resp = requests.get(BASE_URL, params=params, timeout=45)
+            return resp.json()
+        except requests.exceptions.ConnectionError:
+            if attempt < max_retries:
+                wait = 2 ** attempt
+                print(f"      ⚠️ 연결 실패 (시도 {attempt}/{max_retries}), {wait}초 후 재시도...")
+                time.sleep(wait)
+            else:
+                print(f"      ❌ 연결 실패 ({max_retries}회 모두 실패)")
+                return None
+        except Exception as e:
+            print(f"      ❌ API 호출 실패: {e}")
+            return None
 
 
 def parse_price(price_str):
@@ -119,72 +142,195 @@ def parse_price(price_str):
 
 
 # ============================================================
+# 응답 파싱 — 중도매인 판매가격(도매) 블록에서 월별 데이터 추출
+# ============================================================
+def extract_wholesale_monthly(data, target_keyword):
+    """
+    monthlySalesList 응답에서 중도매인 판매가격(도매) 데이터 추출
+
+    Parameters
+    ----------
+    data : dict          API 응답
+    target_keyword : str 품목명 키워드 (caption 검증용)
+
+    Returns
+    -------
+    list of dict : [{date, price}, ...]
+    """
+    prices_blocks = data.get("price", [])
+    if not prices_blocks or not isinstance(prices_blocks, list):
+        return []
+
+    records = []
+
+    for block in prices_blocks:
+        if not isinstance(block, dict):
+            continue
+
+        cls_code = block.get("productclscode", "")
+        caption = block.get("caption", "")
+
+        # 중도매인 판매가격 = "02", 상품 등급 우선
+        # caption에서 품목명 + "상품" 확인
+        if cls_code != "02":
+            continue
+        if target_keyword not in caption:
+            continue
+        if "상품" not in caption:
+            continue
+
+        items = block.get("item", [])
+        if not items or not isinstance(items, list):
+            continue
+
+        for year_data in items:
+            if not isinstance(year_data, dict):
+                continue
+
+            yyyy = year_data.get("yyyy", "")
+            if not yyyy:
+                continue
+
+            for month in range(1, 13):
+                price = parse_price(year_data.get(f"m{month}", "-"))
+                if price is None:
+                    continue
+
+                records.append({
+                    "date": f"{yyyy}-{month:02d}-01",
+                    "price": price,
+                    "caption": caption,
+                })
+
+        # 상품 등급 블록을 찾았으면 중복 방지
+        if records:
+            break
+
+    # 상품 등급이 없으면 중품이라도 사용
+    if not records:
+        for block in prices_blocks:
+            if not isinstance(block, dict):
+                continue
+            cls_code = block.get("productclscode", "")
+            caption = block.get("caption", "")
+            if cls_code != "02" or target_keyword not in caption:
+                continue
+
+            items = block.get("item", [])
+            if not items or not isinstance(items, list):
+                continue
+
+            for year_data in items:
+                if not isinstance(year_data, dict):
+                    continue
+                yyyy = year_data.get("yyyy", "")
+                if not yyyy:
+                    continue
+                for month in range(1, 13):
+                    price = parse_price(year_data.get(f"m{month}", "-"))
+                    if price is None:
+                        continue
+                    records.append({
+                        "date": f"{yyyy}-{month:02d}-01",
+                        "price": price,
+                        "caption": caption,
+                    })
+            if records:
+                break
+
+    return records
+
+
+# ============================================================
 # 수집 함수
 # ============================================================
 def collect_kamis(start_year=2000, end_year=2026):
     """
-    KAMIS 도매가 전체 수집
+    KAMIS 도매가(중도매인 판매가격) 전체 수집
 
-    periodProductList API는 조회 기간이 제한되어 있으므로
-    연도별로 순회하여 수집합니다.
+    monthlySalesList는 p_period=3 → 기준연도 포함 4개년 반환
+    → 4년 단위로 순회하여 전체 기간 커버
     """
     print("=" * 60)
-    print(f"  KAMIS 도매가 수집")
+    print(f"  KAMIS 도매가 수집 (monthlySalesList)")
     print(f"  기간: {start_year} ~ {end_year}")
     print("=" * 60)
 
-    targets = load_kamis_targets()
-    print(f"  수집 대상: {len(targets)}개 품목")
-    for t in targets:
-        print(f"    {t['commodity_id']:<12} {t['name_kr']} (부류:{t['category_code']}, 품목:{t['item_code']})")
+    print(f"  수집 대상: {len(KAMIS_TARGETS)}개 품목")
+    for t in KAMIS_TARGETS:
+        print(f"    {t['commodity_id']:<12} {t['name_kr']} "
+              f"(부류:{t['category_code']}, 품목:{t['item_code']})")
 
     all_records = []
 
-    for target in targets:
+    for target in KAMIS_TARGETS:
         cid = target["commodity_id"]
         name_kr = target["name_kr"]
         cat_code = target["category_code"]
         item_code = target["item_code"]
+        keyword = target["target_caption_keyword"]
 
         print(f"\n  [{name_kr}] ({cid}) 수집 중...")
 
-        for year in range(start_year, end_year + 1):
-            start_day = f"{year}-01-01"
-            end_day = f"{year}-12-31"
+        item_records = []
+        seen_dates = set()  # 중복 방지
+        caption_logged = False
 
-            items = fetch_period_prices(cat_code, item_code, start_day, end_day)
+        # 4년 단위로 순회 (p_period=3 → 4개년 반환)
+        # end_year부터 역순으로, 4년씩 건너뜀
+        query_years = list(range(end_year, start_year - 1, -4))
+        # start_year 근처에서 누락 방지
+        if query_years[-1] > start_year:
+            query_years.append(start_year)
 
-            if not items:
+        for yyyy in query_years:
+            data = fetch_monthly(cat_code, item_code, str(yyyy), period="3")
+            if data is None:
+                print(f"    {yyyy}: ❌ 호출 실패")
                 continue
 
-            for it in items:
-                yyyy = it.get("yyyy", "")
-                regday = it.get("regday", "")  # MM/DD 형식
-                price = parse_price(it.get("price", ""))
+            records = extract_wholesale_monthly(data, keyword)
 
-                if not yyyy or not regday or price is None:
-                    continue
+            if not records:
+                print(f"    {yyyy}: 데이터 없음")
+                continue
 
-                # 날짜 변환
-                try:
-                    date_str = f"{yyyy}-{regday.replace('/', '-')}"
-                    date = pd.to_datetime(date_str, format="%Y-%m-%d")
-                except Exception:
-                    continue
+            # caption 로그 (한 번만)
+            if not caption_logged and records:
+                print(f"    caption: {records[0]['caption']}")
+                caption_logged = True
 
-                all_records.append({
-                    "date": date,
-                    "commodity_id": cid,
-                    "item_name": name_kr,
-                    "price": price,
-                    "unit": "원/kg",
-                })
+            # 중복 제거 후 추가
+            new_count = 0
+            for r in records:
+                if r["date"] not in seen_dates:
+                    seen_dates.add(r["date"])
+                    item_records.append({
+                        "date": r["date"],
+                        "commodity_id": cid,
+                        "item_name": name_kr,
+                        "price": r["price"],
+                        "unit": "원/kg",
+                    })
+                    new_count += 1
+
+            years_in_batch = sorted(set(r["date"][:4] for r in records))
+            print(f"    기준연도 {yyyy}: {new_count}건 추가 "
+                  f"(연도: {', '.join(years_in_batch)})")
 
             time.sleep(0.3)
 
-        year_count = len(set(r["date"].year for r in all_records if r["commodity_id"] == cid))
-        item_count = len([r for r in all_records if r["commodity_id"] == cid])
-        print(f"    → {item_count}건 ({year_count}개 연도)")
+        # 품목 요약
+        if item_records:
+            prices = [r["price"] for r in item_records]
+            dates = sorted(r["date"] for r in item_records)
+            print(f"    ─ 소계: {len(item_records)}개월, "
+                  f"{dates[0][:7]}~{dates[-1][:7]}, "
+                  f"{min(prices):,.0f}~{max(prices):,.0f} 원/kg")
+        else:
+            print(f"    ─ 소계: 0건")
+
+        all_records.extend(item_records)
 
     if not all_records:
         print("\n  ❌ 수집된 데이터가 없습니다.")
@@ -192,45 +338,26 @@ def collect_kamis(start_year=2000, end_year=2026):
 
     # DataFrame 변환
     df = pd.DataFrame(all_records)
+    df["date"] = pd.to_datetime(df["date"])
     df = df.sort_values(["commodity_id", "date"]).reset_index(drop=True)
 
-    # 일별 원본 저장
-    daily_path = RAW_DIR / "kamis_wholesale_daily.csv"
-    df.to_csv(daily_path, index=False, encoding="utf-8-sig")
-    print(f"\n  💾 일별 원본 저장: {daily_path} ({len(df)}건)")
-
-    # 월평균 집계
-    df["year_month"] = df["date"].dt.to_period("M")
-    monthly = df.groupby(["year_month", "commodity_id", "item_name"]).agg(
-        price_avg=("price", "mean"),
-        price_min=("price", "min"),
-        price_max=("price", "max"),
-        sample_count=("price", "count"),
-    ).reset_index()
-
-    monthly["date"] = monthly["year_month"].dt.to_timestamp()
-    monthly = monthly.drop(columns=["year_month"])
-    monthly = monthly[["date", "commodity_id", "item_name",
-                        "price_avg", "price_min", "price_max", "sample_count"]]
-    monthly = monthly.sort_values(["commodity_id", "date"]).reset_index(drop=True)
-
-    # 월평균 저장
+    # 월별 데이터 저장 (monthlySalesList는 이미 월별)
     monthly_path = RAW_DIR / "kamis_wholesale_monthly.csv"
-    monthly.to_csv(monthly_path, index=False, encoding="utf-8-sig")
-    print(f"  💾 월평균 저장: {monthly_path} ({len(monthly)}개월)")
+    df.to_csv(monthly_path, index=False, encoding="utf-8-sig")
+    print(f"\n  💾 월별 저장: {monthly_path} ({len(df)}건)")
 
     # 요약
     print(f"\n  📋 수집 요약:")
-    for cid in sorted(monthly["commodity_id"].unique()):
-        sub = monthly[monthly["commodity_id"] == cid]
+    for cid in sorted(df["commodity_id"].unique()):
+        sub = df[df["commodity_id"] == cid]
         print(
             f"    {cid:<12} {sub['item_name'].iloc[0]:<8} "
             f"{len(sub):>4}개월  "
             f"{sub['date'].min().strftime('%Y-%m')}~{sub['date'].max().strftime('%Y-%m')}  "
-            f"{sub['price_avg'].min():,.0f}~{sub['price_avg'].max():,.0f} 원/kg"
+            f"{sub['price'].min():,.0f}~{sub['price'].max():,.0f} 원/kg"
         )
 
-    return monthly
+    return df
 
 
 if __name__ == "__main__":

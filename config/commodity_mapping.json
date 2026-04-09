@@ -1,14 +1,15 @@
 {
   "_meta": {
-    "version": "3.0.0",
+    "version": "3.1.0",
     "created": "2026-04-02",
-    "updated": "2026-04-08",
+    "updated": "2026-04-09",
     "description": "품목 매핑 테이블: 10개 품목, 7개 데이터 소스 간 코드 연결",
     "notes": [
+      "v3.1.0: KAMIS API를 periodProductList→monthlySalesList로 전환, 품목코드 수정 (쇠고기 511→512, 땅콩 313→314, 바나나 416→418, 오렌지 420→421)",
       "v3.0.0: 10개 품목 확장, PPI 404Y016(품목별) 코드 적용, KAMIS periodProductList API 사용",
       "PPI 통계표: 404Y016(품목별) 우선, 없으면 404Y014(기본분류) 사용",
       "CPI 통계표: 901Y009(품목별)",
-      "KAMIS: dailyPriceByCategoryList는 부류 필터 불가 → periodProductList 사용"
+      "KAMIS: periodProductList는 과거 조회 불가 → monthlySalesList로 전환. 품목코드 체계가 API마다 다름에 주의"
     ]
   },
 
@@ -396,7 +397,7 @@
       "commodity_id": "beef",
       "name_kr": "쇠고기",
       "name_en": "Beef",
-      "has_wholesale": true,
+      "has_wholesale": false,
 
       "sources": {
         "worldbank_pinksheet": {
@@ -433,11 +434,8 @@
           ]
         },
         "kamis_wholesale": {
-          "category_code": "500",
-          "item_code": "511",
-          "item_name": "쇠고기",
-          "api_action": "periodProductList",
-          "status": "confirmed"
+          "status": "unavailable",
+          "note": "KAMIS 중도매인 도매가(monthlySalesList) 미제공. 축평원 경락가격은 별도 소스이나 본 연구에서 미사용"
         }
       },
 
@@ -453,12 +451,15 @@
           "status": "pending"
         },
         "segment_C": {
-          "upstream": "ecos_ppi",
-          "downstream": "kamis_wholesale",
-          "status": "active"
+          "status": "excluded",
+          "reason": "KAMIS 도매가 미존재 (축평원 경유 품목)"
         },
         "segment_D": {
-          "upstream": "kamis_wholesale",
+          "status": "excluded",
+          "reason": "KAMIS 도매가 미존재 (축평원 경유 품목)"
+        },
+        "segment_D_prime": {
+          "upstream": "ecos_ppi",
           "downstream": "ecos_cpi",
           "status": "active"
         }
@@ -505,10 +506,11 @@
         },
         "kamis_wholesale": {
           "category_code": "300",
-          "item_code": "313",
+          "item_code": "314",
           "item_name": "땅콩",
-          "api_action": "periodProductList",
-          "status": "confirmed"
+          "api_action": "monthlySalesList",
+          "status": "confirmed",
+          "note": "v3: 품목코드 313→314 (monthlySalesList 기준), API 전환"
         }
       },
 
@@ -574,10 +576,11 @@
         },
         "kamis_wholesale": {
           "category_code": "400",
-          "item_code": "416",
+          "item_code": "418",
           "item_name": "바나나",
-          "api_action": "periodProductList",
-          "status": "confirmed"
+          "api_action": "monthlySalesList",
+          "status": "confirmed",
+          "note": "v3: 품목코드 416→418 (monthlySalesList 기준), API 전환"
         }
       },
 
@@ -643,10 +646,11 @@
         },
         "kamis_wholesale": {
           "category_code": "400",
-          "item_code": "420",
+          "item_code": "421",
           "item_name": "오렌지",
-          "api_action": "periodProductList",
-          "status": "confirmed"
+          "api_action": "monthlySalesList",
+          "status": "confirmed",
+          "note": "v3: 품목코드 420→421 (monthlySalesList 기준), API 전환"
         }
       },
 
