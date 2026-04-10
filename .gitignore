@@ -19,6 +19,8 @@ data/raw/**/*.xlsx
 data/raw/**/*.xls
 data/raw/**/*.csv
 !data/raw/**/.gitkeep
+data/processed/
+!data/output/
 
 # === 분석 결과 ===
 data/output/
