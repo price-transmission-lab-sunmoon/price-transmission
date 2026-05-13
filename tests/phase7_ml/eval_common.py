@@ -75,9 +75,9 @@ def get_ml_detectable_range(data_dir, cid, seg):
     """
     data_dir = Path(data_dir)
     baseline = json.load(
-        open(data_dir / "phase4" / "baseline" / f"{cid}_{seg}_baseline.json")
+        open(data_dir / "phase4" / "baseline" / f"{cid}_{seg}_baseline.json", encoding="utf-8")
     )
-    config = json.load(open(data_dir / "product_config.json"))
+    config = json.load(open(data_dir / "product_config.json", encoding="utf-8"))
 
     warmup_end = pd.Timestamp(baseline["warmup_end"] + "-01")
     common_end = pd.Timestamp(config[cid]["common_end"] + "-01")
@@ -189,7 +189,7 @@ def load_all_grades(ml_dir):
 
 def get_ml_segments(data_dir):
     """ML 적용 구간(A, B) 목록을 반환한다."""
-    config = json.load(open(Path(data_dir) / "product_config.json"))
+    config = json.load(open(Path(data_dir) / "product_config.json", encoding="utf-8"))
     segments = []
     for cid, cfg in config.items():
         for seg in cfg["segments"]:
@@ -204,3 +204,4 @@ def get_ml_segments(data_dir):
 def log_eval(msg):
     """평가 로그 출력."""
     print(f"[ML-Eval] {msg}")
+    
