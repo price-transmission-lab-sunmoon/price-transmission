@@ -138,7 +138,7 @@ def generate_html(data, compare_data=None):
     axis4_js = df_to_js_array(data["axis4"],
         ["commodity_id", "segment", "n_base", "avg_contam_sr", "avg_k_sr"])
     axis5_js = df_to_js_array(data["axis5"],
-        ["commodity_id", "segment", "cta", "asc", "esr_stat", "esr_ml", "n_shocks", "hypothesis_holds"])
+        ["commodity_id", "segment", "cta", "asc", "p_stat", "p_ml", "esr_stat", "esr_ml", "n_shocks", "hypothesis_holds"])
 
     # 비교 배너
     compare_banner = ""
@@ -296,8 +296,8 @@ body {{ font-family:'Noto Sans KR',sans-serif; background:var(--bg-primary); col
   <div class="section">
     <div class="section-header">
       <span class="section-number">AXIS 5</span>
-      <span class="section-title">합의 기반 지표 (CTA + ASC)</span>
-      <span class="section-desc">핵심 가설: ASC &gt; max(ESR_stat, ESR_ml)</span>
+      <span class="section-title">합의 기반 지표 (CTA + ASC + P_stat + P_ml)</span>
+      <span class="section-desc">핵심 가설: ASC &gt; max(P_stat, P_ml)</span>
     </div>
     <div class="chart-grid">
       <div class="chart-card"><h3>CTA vs ASC 산점도</h3><div class="chart-container wide"><canvas id="cta_asc"></canvas></div></div>
@@ -455,17 +455,17 @@ new Chart(document.getElementById('sens_k'), {{
 }});
 
 // === AXIS 5 ===
-const scatterData = axis5.map(d => ({{ x:d.cta, y:d.asc, label:d.commodity_id+' '+d.segment, hyp:d.hypothesis_holds }}));
+const scatterData = axis5.map(d => ({{ x:d.cta, y:d.asc, label:d.commodity_id+' '+d.segment, hyp:d.hypothesis_holds, p_stat:d.p_stat, p_ml:d.p_ml }}));
 new Chart(document.getElementById('cta_asc'), {{
   type:'scatter',
   data:{{ datasets:[{{ label:'품목×구간', data:scatterData, backgroundColor:scatterData.map(d=>d.hyp===true?'rgba(16,185,129,0.8)':d.hyp===false?'rgba(244,63,94,0.6)':'rgba(100,116,139,0.5)'), pointRadius:7, pointHoverRadius:10 }}] }},
-  options:{{ responsive:true, maintainAspectRatio:false, plugins:{{ legend:{{display:false}}, tooltip:{{callbacks:{{label:(ctx)=>`${{scatterData[ctx.dataIndex].label}}: CTA=${{ctx.parsed.x.toFixed(3)}}, ASC=${{ctx.parsed.y.toFixed(3)}}`}}}} }}, scales:{{ x:{{title:{{display:true,text:'CTA (교차 합의율)'}},min:0}}, y:{{title:{{display:true,text:'ASC (합의-충격 일치율)'}},min:0}} }} }}
+  options:{{ responsive:true, maintainAspectRatio:false, plugins:{{ legend:{{display:false}}, tooltip:{{callbacks:{{label:(ctx)=>{{const d=scatterData[ctx.dataIndex]; return `${{d.label}}: CTA=${{ctx.parsed.x.toFixed(3)}}, ASC=${{ctx.parsed.y.toFixed(3)}}, P_stat=${{d.p_stat!==null?d.p_stat.toFixed(3):'—'}}, P_ml=${{d.p_ml!==null?d.p_ml.toFixed(3):'—'}}`;}}}}}} }}, scales:{{ x:{{title:{{display:true,text:'CTA (교차 합의율)'}},min:0}}, y:{{title:{{display:true,text:'ASC (합의-충격 일치율)'}},min:0}} }} }}
 }});
 
-let hypHtml = '<table class="heatmap-table"><thead><tr><th>품목 구간</th><th>CTA</th><th>ASC</th><th>ESR_stat</th><th>ESR_ml</th><th>가설</th></tr></thead><tbody>';
+let hypHtml = '<table class="heatmap-table"><thead><tr><th>품목 구간</th><th>CTA</th><th>ASC</th><th>P_stat</th><th>P_ml</th><th>ESR_stat</th><th>ESR_ml</th><th>가설</th></tr></thead><tbody>';
 axis5.forEach(d => {{
   const badge = d.hypothesis_holds===true?'<span class="hypothesis-badge hyp-true">성립</span>':d.hypothesis_holds===false?'<span class="hypothesis-badge hyp-false">기각</span>':'<span class="hypothesis-badge hyp-na">N/A</span>';
-  hypHtml += `<tr><td>${{d.commodity_id}} ${{d.segment}}</td><td>${{d.cta.toFixed(3)}}</td><td>${{d.asc!==null?d.asc.toFixed(3):'—'}}</td><td>${{d.esr_stat!==null?d.esr_stat.toFixed(2):'—'}}</td><td>${{d.esr_ml!==null?d.esr_ml.toFixed(2):'—'}}</td><td>${{badge}}</td></tr>`;
+  hypHtml += `<tr><td>${{d.commodity_id}} ${{d.segment}}</td><td>${{d.cta.toFixed(3)}}</td><td>${{d.asc!==null?d.asc.toFixed(3):'—'}}</td><td>${{d.p_stat!==null?d.p_stat.toFixed(3):'—'}}</td><td>${{d.p_ml!==null?d.p_ml.toFixed(3):'—'}}</td><td>${{d.esr_stat!==null?d.esr_stat.toFixed(2):'—'}}</td><td>${{d.esr_ml!==null?d.esr_ml.toFixed(2):'—'}}</td><td>${{badge}}</td></tr>`;
 }});
 hypHtml += '</tbody></table>';
 document.getElementById('hypothesis_table').innerHTML = hypHtml;
@@ -491,7 +491,7 @@ const verdicts = [
   {{ axis:'축 2 분리도', value:'IF='+avg(axis2.map(d=>d.sr_if)).toFixed(1)+' LOF='+avg(axis2.map(d=>d.sr_lof)).toFixed(1)+' SVM='+avg(axis2.map(d=>d.sr_svm)).toFixed(1), interp:'3종 모두 SR > 2.0 — 내부 분리 양호', grade:'grade-good' }},
   {{ axis:'축 3 AUC', value:avgAUC.toFixed(3), interp:avgAUC.toFixed(2)+' 수준 — '+(avgAUC>=0.70?'이상적 (독립성+일관성)':avgAUC>=0.50?'독립성 확보 (순환 논리 방지 작동)':'역방향'), grade:avgAUC>=0.70?'grade-good':'grade-moderate' }},
   {{ axis:'축 4 안정성', value:'C='+avgContamSR.toFixed(2)+' K='+avgKSR.toFixed(2), interp:'k 변동 강건('+avgKSR.toFixed(2)+'), contamination 보통('+avgContamSR.toFixed(2)+')', grade:avgSens>=0.80?'grade-good':'grade-moderate' }},
-  {{ axis:'축 5 합의', value:'CTA='+avgCTA.toFixed(3), interp:'가설 '+axis5.filter(d=>d.hypothesis_holds===true).length+'/'+axis5.filter(d=>d.hypothesis_holds!==null).length+' 성립'+(avgCTA<0.20?' — 개선 필요':''), grade:avgCTA>=0.30?'grade-good':avgCTA>=0.15?'grade-moderate':'grade-weak' }},
+  {{ axis:'축 5 합의', value:'CTA='+avgCTA.toFixed(3), interp:'가설(ASC>max(P)) '+axis5.filter(d=>d.hypothesis_holds===true).length+'/'+axis5.filter(d=>d.hypothesis_holds!==null).length+' 성립'+(avgCTA<0.20?' — 개선 필요':''), grade:avgCTA>=0.30?'grade-good':avgCTA>=0.15?'grade-moderate':'grade-weak' }},
 ];
 
 let vHtml = '<table class="heatmap-table"><thead><tr><th>축</th><th>핵심값</th><th>해석</th><th>판정</th></tr></thead><tbody>';
