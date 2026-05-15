@@ -29,10 +29,10 @@ from sklearn.svm import OneClassSVM
 # ---------------------------------------------------------------------------
 RANDOM_STATE = 42
 IF_N_ESTIMATORS = 100
-CONTAMINATION = 0.10
+CONTAMINATION = 0.08
 LOF_N_NEIGHBORS = 10
 SVM_KERNEL = "rbf"
-SVM_NU = 0.10
+SVM_NU = 0.08
 SVM_GAMMA = "scale"
 
 # 앙상블 기준: 2개 이상 모델이 이상 판정 시 ml_detected=True
