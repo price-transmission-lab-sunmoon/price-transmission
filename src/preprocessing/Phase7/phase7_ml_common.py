@@ -12,7 +12,7 @@ Phase 7-ML 공통 모듈 (phase7_ml_common.py)
 출력 파일:
   없음 (라이브러리 모듈)
 
-피처 목록 (10종):
+피처 목록 (8종):
   --- 기존 6종 (Phase 0~4 원시 지표) ---
   F1  transmission_rate      : 월별 전이율
   F2  upstream_pct           : 상류 가격 변화율 (%)
@@ -21,21 +21,20 @@ Phase 7-ML 공통 모듈 (phase7_ml_common.py)
   F5  exchange_rate_pct      : 환율 월 변동률 (%)
   F6  intl_price_usd_pct     : 달러 국제가 월 변동률 (%)
 
-  --- 추가 4종 (F2, F6의 시간적 변환) ---
+  --- 추가 2종 (F2, F6의 시차 변환) ---
   F7  upstream_pct_lag1      : F2의 1개월 시차 (충격 전달 과정 포착)
   F8  intl_price_usd_pct_lag1: F6의 1개월 시차 (국제가 충격 지속성)
-  F9  upstream_pct_std3      : F2의 3개월 이동표준편차 (상류 변동성 국면)
-  F10 intl_price_usd_pct_std3: F6의 3개월 이동표준편차 (국제가 변동성)
 
 순환 논리 방지:
   Phase 7 통계 판정 결과(zscore, pattern_flag 등)는 피처에서 완전 제외한다.
-  추가 피처는 F2, F6의 수학적 변환(shift, rolling)이며, Phase 0~4 원시 지표 기반이다.
+  추가 피처는 F2, F6의 수학적 변환(shift)이며, Phase 0~4 원시 지표 기반이다.
 
 변경 이력:
   v2 (2026-05-15):
-    - 피처 6종 → 10종 확장
-    - load_feature_matrix()에 파생 피처 생성 로직 추가
-    - FEATURE_COLUMNS_BASE (원시 6종) + FEATURE_COLUMNS_DERIVED (파생 4종) 분리
+    - 피처 6종 → 10종 확장 (lag 2 + rolling std 2)
+  v3 (2026-05-15):
+    - 피처 10종 → 8종 축소 (rolling std 2종 제거 — 노이즈로 판명)
+    - lag 2종만 유지: upstream_pct_lag1, intl_price_usd_pct_lag1
 """
 
 import pandas as pd
@@ -58,15 +57,13 @@ FEATURE_COLUMNS_BASE = [
     "intl_price_usd_pct",
 ]
 
-# 파생 피처 (원시 피처에서 시간적 변환으로 생성하는 4종)
+# 파생 피처 (원시 피처에서 시간적 변환으로 생성하는 2종)
 FEATURE_COLUMNS_DERIVED = [
     "upstream_pct_lag1",
     "intl_price_usd_pct_lag1",
-    "upstream_pct_std3",
-    "intl_price_usd_pct_std3",
 ]
 
-# 전체 피처 (모델 입력에 사용되는 10종)
+# 전체 피처 (모델 입력에 사용되는 8종)
 FEATURE_COLUMNS = FEATURE_COLUMNS_BASE + FEATURE_COLUMNS_DERIVED
 
 # ML 적용 구간
@@ -79,11 +76,10 @@ ML_SEGMENTS = ["A", "B"]
 def load_feature_matrix(phase7_dir, cid, seg):
     """
     stat_timeseries CSV에서 원시 6종 피처를 읽고,
-    파생 4종 피처를 생성하여 총 10종 피처 행렬을 반환한다.
+    파생 2종 피처를 생성하여 총 8종 피처 행렬을 반환한다.
 
     파생 피처 생성 규칙:
       - lag 피처: shift(1)로 1개월 시차. 첫 1행 NaN 발생.
-      - rolling std 피처: rolling(3).std()로 3개월 이동표준편차. 첫 2행 NaN 발생.
       - 결측은 preprocess_features()에서 dropna로 제거.
 
     Args:
@@ -93,7 +89,7 @@ def load_feature_matrix(phase7_dir, cid, seg):
 
     Returns:
         (features_raw DataFrame, dates Series)
-        features_raw: 10종 피처 (결측 포함, 스케일링 전)
+        features_raw: 8종 피처 (결측 포함, 스케일링 전)
         dates: 날짜 Series (원시 기간 전체)
     """
     phase7 = Path(phase7_dir)
@@ -117,16 +113,6 @@ def load_feature_matrix(phase7_dir, cid, seg):
     # F8: intl_price_usd_pct 1개월 시차
     features_raw["intl_price_usd_pct_lag1"] = features_raw["intl_price_usd_pct"].shift(1)
 
-    # F9: upstream_pct 3개월 이동표준편차
-    features_raw["upstream_pct_std3"] = (
-        features_raw["upstream_pct"].rolling(window=3, min_periods=3).std()
-    )
-
-    # F10: intl_price_usd_pct 3개월 이동표준편차
-    features_raw["intl_price_usd_pct_std3"] = (
-        features_raw["intl_price_usd_pct"].rolling(window=3, min_periods=3).std()
-    )
-
     return features_raw, dates
 
 
@@ -138,15 +124,15 @@ def preprocess_features(features_raw):
     피처 행렬에서 결측을 제거하고 StandardScaler를 적용한다.
 
     결측이 있는 행(월) 전체를 제외한다.
-    lag(1행) + rolling(2행) = 최대 2행 추가 손실.
+    lag(1행) = 최대 1행 추가 손실.
     전체 기간 단일 fit (품목x구간 조합별 독립).
 
     Args:
-        features_raw: 10종 피처 DataFrame (결측 포함)
+        features_raw: 8종 피처 DataFrame (결측 포함)
 
     Returns:
         (X_scaled ndarray, valid_index DatetimeIndex, scaler StandardScaler)
-        X_scaled: 스케일링된 피처 행렬 (n_valid x 10)
+        X_scaled: 스케일링된 피처 행렬 (n_valid x 8)
         valid_index: 결측 제거 후 남은 날짜 인덱스
         scaler: fit된 StandardScaler 객체
     """
