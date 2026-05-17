@@ -21,7 +21,7 @@ import sys
 import os
 import pandas as pd
 import numpy as np
-from sklearn.metrics import roc_auc_score
+from sklearn.metrics import roc_auc_score, roc_curve
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from eval_common import (
@@ -35,12 +35,14 @@ from eval_common import (
 def compute_auc_segment(pred_df, cv_df):
     """
     단일 품목x구간에 대해 모델별 + 앙상블 AUC를 산출한다.
+    ROC curve (FPR/TPR 배열)도 함께 반환한다.
 
     pseudo-label: stat_detected (통계 탐지 여부)
     score: ML 이상 점수 (부호 반전하여 높을수록 이상으로 통일)
 
     Returns:
-        dict {auc_if, auc_lof, auc_svm, auc_ensemble}
+        dict {auc_if, auc_lof, auc_svm, auc_ensemble, roc_curves}
+        roc_curves: {model_name: [(fpr, tpr), ...]} — 대시보드 ROC Curve용
     """
     # date 기준 merge
     merged = pred_df.merge(
@@ -54,6 +56,7 @@ def compute_auc_segment(pred_df, cv_df):
         return {
             "auc_if": np.nan, "auc_lof": np.nan,
             "auc_svm": np.nan, "auc_ensemble": np.nan,
+            "roc_curves": {},
         }
 
     # 부호 반전: 3종 모델 전부 "높을수록 이상"으로 통일
@@ -63,14 +66,19 @@ def compute_auc_segment(pred_df, cv_df):
     scores_ensemble = merged["ml_consensus_count"].values  # 0~3, 이미 높을수록 이상
 
     results = {}
+    roc_curves = {}
     for name, scores in [("auc_if", scores_if), ("auc_lof", scores_lof),
                          ("auc_svm", scores_svm), ("auc_ensemble", scores_ensemble)]:
         try:
             auc = roc_auc_score(y_true, scores)
             results[name] = round(auc, 4)
+            fpr, tpr, _ = roc_curve(y_true, scores)
+            roc_curves[name] = (fpr.tolist(), tpr.tolist())
         except ValueError:
             results[name] = np.nan
+            roc_curves[name] = ([], [])
 
+    results["roc_curves"] = roc_curves
     return results
 
 
