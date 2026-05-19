@@ -3,7 +3,15 @@ ML 평가 공통 모듈 (eval_common.py)
 ===================================
 역할:
   외부 충격 사건 정의, 품목x충격 매핑, ML 탐지 가능 기간 판별,
-  데이터 로딩 함수를 제공한다. 축 1(ESR)과 축 5(CTA+ASC)에서 공유.
+  데이터 로딩 함수를 제공한다. 축 1(ESR)과 축 5(CTA+ASC+P_stat+P_ml)에서 공유.
+
+변경 이력:
+  v2 (2026-05-14):
+    - E3(브라질 서리), E5(인도네시아 팜유 수출 규제) 삭제
+      사유: E3-E4, E4-E5 윈도우 겹침 → 충격 간 분리 불가
+    - E6(러시아 가뭄·수출 금지 2010.08~2011.06) 추가
+    - E9(역대급 엘니뇨 2015.09~2016.06) 추가
+    - is_date_in_shock_windows() 헬퍼 함수 추가 (P_stat, P_ml 산출용)
 
 위치: tests/phase7_ml/eval_common.py
 """
@@ -16,7 +24,7 @@ from pathlib import Path
 
 
 # ---------------------------------------------------------------------------
-# 외부 충격 사건 정의
+# 외부 충격 사건 정의 (시간순 정렬)
 # ---------------------------------------------------------------------------
 EXTERNAL_SHOCKS = [
     {
@@ -28,6 +36,22 @@ EXTERNAL_SHOCKS = [
                         "coffee", "beef", "groundnuts", "banana", "orange"],
     },
     {
+        "id": "E6",
+        "name": "2010 러시아 가뭄·수출 금지",
+        "start": "2010-08-01",
+        "end": "2011-06-01",
+        "commodities": ["wheat", "maize", "soybean", "palmoil", "sugar",
+                        "coffee", "beef"],
+    },
+    {
+        "id": "E9",
+        "name": "2015-16 역대급 엘니뇨",
+        "start": "2015-09-01",
+        "end": "2016-06-01",
+        "commodities": ["maize", "soybean", "palmoil", "sugar",
+                        "coffee", "beef"],
+    },
+    {
         "id": "E2",
         "name": "2020 COVID-19 팬데믹",
         "start": "2020-02-01",
@@ -36,25 +60,11 @@ EXTERNAL_SHOCKS = [
                         "coffee", "beef", "groundnuts", "banana", "orange"],
     },
     {
-        "id": "E3",
-        "name": "2021-22 브라질 서리",
-        "start": "2021-06-01",
-        "end": "2022-03-01",
-        "commodities": ["coffee", "sugar", "banana"],
-    },
-    {
         "id": "E4",
         "name": "2022 우크라이나 전쟁",
         "start": "2022-02-01",
         "end": "2022-10-01",
         "commodities": ["wheat", "maize", "soybean", "palmoil"],
-    },
-    {
-        "id": "E5",
-        "name": "2022 인도네시아 팜유 수출 규제",
-        "start": "2022-04-01",
-        "end": "2022-06-01",
-        "commodities": ["palmoil"],
     },
 ]
 
@@ -122,6 +132,28 @@ def get_applicable_shocks(data_dir, cid, seg):
         applicable.append(shock)
 
     return applicable
+
+
+# ---------------------------------------------------------------------------
+# 충격 윈도우 판별 헬퍼 (P_stat, P_ml 산출용)
+# ---------------------------------------------------------------------------
+def is_date_in_shock_windows(date, shocks):
+    """
+    특정 날짜가 주어진 충격 목록의 윈도우 중 하나에 포함되는지 확인한다.
+
+    Args:
+        date: 확인할 날짜 (Timestamp)
+        shocks: 적용 가능한 충격 목록 (get_applicable_shocks 반환값)
+
+    Returns:
+        True if date is within any shock window, False otherwise
+    """
+    for shock in shocks:
+        s_start = pd.Timestamp(shock["start"])
+        s_end = pd.Timestamp(shock["end"])
+        if s_start <= date <= s_end:
+            return True
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -204,4 +236,3 @@ def get_ml_segments(data_dir):
 def log_eval(msg):
     """평가 로그 출력."""
     print(f"[ML-Eval] {msg}")
-    
