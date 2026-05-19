@@ -20,9 +20,13 @@ data/raw/**/*.xls
 data/raw/**/*.csv
 !data/raw/**/.gitkeep
 data/processed/
+
+
 # === 분석 결과 ===
 data/output/
 !data/output/.gitkeep
+
+tests/phase7_ml/results/
 
 # === Jupyter 체크포인트 ===
 .ipynb_checkpoints/
