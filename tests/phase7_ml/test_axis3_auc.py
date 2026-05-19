@@ -7,6 +7,12 @@
   이상적 AUC 구간: 0.70~0.90 (독립성과 일관성 공존).
 
   score 방향 통일: 3종 모델 전부 부호 반전하여 "높을수록 이상"으로 변환.
+  앙상블 스코어: 3종 모델의 정규화된 이상 점수 평균 (연속형).
+
+변경 이력:
+  v2 (2026-05-18):
+    - 앙상블 스코어를 이산형(ml_consensus_count 0~3) → 연속형(Min-Max 정규화 평균)으로 변경
+    - ROC curve FPR/TPR 배열 반환 추가
 
 입력 파일:
   - data/processed/phase7_ml/predictions/{cid}_{seg}_ml_predictions.csv
@@ -63,7 +69,19 @@ def compute_auc_segment(pred_df, cv_df):
     scores_if = -merged["if_score"].values
     scores_lof = -merged["lof_score"].values
     scores_svm = -merged["svm_score"].values
-    scores_ensemble = merged["ml_consensus_count"].values  # 0~3, 이미 높을수록 이상
+
+    # 앙상블 스코어: 연속형 (Min-Max 정규화 후 평균)
+    # 기존 ml_consensus_count(0~3 이산값)는 ROC 곡선이 계단형이 되어
+    # AUC가 과소 측정되므로, 3종 모델의 연속 점수를 결합한다.
+    def minmax_norm(arr):
+        rng = arr.max() - arr.min()
+        if rng == 0:
+            return np.zeros_like(arr)
+        return (arr - arr.min()) / rng
+
+    scores_ensemble = (
+        minmax_norm(scores_if) + minmax_norm(scores_lof) + minmax_norm(scores_svm)
+    ) / 3
 
     results = {}
     roc_curves = {}
