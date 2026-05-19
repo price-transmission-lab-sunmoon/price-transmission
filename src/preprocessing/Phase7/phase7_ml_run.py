@@ -44,7 +44,7 @@ from phase7_ml_cross import build_cross_validation, assign_confidence_grades
 # ---------------------------------------------------------------------------
 # 단일 구간 실행
 # ---------------------------------------------------------------------------
-def run_ml_segment(phase7_dir, output_base, cid, seg):
+def run_ml_segment(phase7_dir, output_base, cid, seg, run_date):
     """
     단일 품목x구간에 대해 Phase 7-ML 전체 파이프라인을 실행한다.
 
@@ -77,7 +77,6 @@ def run_ml_segment(phase7_dir, output_base, cid, seg):
 
     # 학습된 모델 + 스케일러 저장 (재현/감사 용도)
     # 파일명에 실행 날짜를 포함하여 버전 관리
-    run_date = datetime.now().strftime("%Y%m%d_%H%M")
     models_dir = output_base / "models" / run_date
     models_dir.mkdir(parents=True, exist_ok=True)
     joblib.dump(models["isolation_forest"], models_dir / f"{cid}_{seg}_if_{run_date}.pkl")
@@ -157,6 +156,8 @@ def run_phase7_ml(data_dir, phase7_dir, output_dir):
         config = json.load(f)
 
     output_base = ensure_ml_output_dirs(output_dir)
+    
+    run_date = datetime.now().strftime("%Y%m%d_%H%M")
 
     # 구간 목록 구성
     segments = []
@@ -170,7 +171,7 @@ def run_phase7_ml(data_dir, phase7_dir, output_dir):
     all_stats = []
 
     for cid, seg in segments:
-        stats = run_ml_segment(phase7_dir, output_base, cid, seg)
+        stats = run_ml_segment(phase7_dir, output_base, cid, seg, run_date)
         all_stats.append(stats)
 
         log_ml(
@@ -185,7 +186,7 @@ def run_phase7_ml(data_dir, phase7_dir, output_dir):
             f"ref={stats['grade_reference']:2d}"
         )
 
-    # 전체 요약 통계
+# 전체 요약 통계
     stats_df = pd.DataFrame(all_stats)
     summary_path = output_base / "phase7_ml_summary.csv"
     stats_df.to_csv(summary_path, index=False, encoding="utf-8-sig")
@@ -197,26 +198,26 @@ def run_phase7_ml(data_dir, phase7_dir, output_dir):
     total_ref = stats_df["grade_reference"].sum()
 
     # --- 실행 로그 저장 (재현/감사 용도) ---
-    run_date = datetime.now().strftime("%Y%m%d")
+    # 주석 처리 또는 삭제: run_date = datetime.now().strftime("%Y%m%d")
     run_timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     run_log = {
-        "run_date": run_date,
+        "run_date": run_date,  # 상단에서 정의한 %Y%m%d_%H%M 가 그대로 유지됩니다.
         "run_timestamp": run_timestamp,
         "parameters": {
             "isolation_forest": {
                 "n_estimators": 100,
-                "contamination": 0.10,
+                "contamination": 0.08,
                 "random_state": 42,
             },
             "lof": {
                 "n_neighbors": 10,
-                "contamination": 0.10,
+                "contamination": 0.08,
                 "novelty": False,
             },
             "ocsvm": {
                 "kernel": "rbf",
-                "nu": 0.10,
+                "nu": 0.08,
                 "gamma": "scale",
             },
             "preprocessing": {
@@ -243,9 +244,11 @@ def run_phase7_ml(data_dir, phase7_dir, output_dir):
         ],
     }
 
-    log_dir = output_base / "models"
+    # 로그 폴더 경로와 파일명 모두 시·분 폴더 내부를 정확히 바라보게 됩니다.
+    log_dir = output_base / "models" / run_date
     log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / f"run_log_{run_date}.json"
+    
     with open(log_path, "w", encoding="utf-8") as f:
         json.dump(run_log, f, indent=2, ensure_ascii=False)
 
