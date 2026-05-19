@@ -21,6 +21,7 @@ ML 평가 통합 실행 (run_all_evaluation.py)
   │   ├── axis1_esr.csv
   │   ├── axis2_separation.csv
   │   ├── axis3_auc.csv
+  │   ├── axis3_roc_curves.json  ← ROC curve FPR/TPR 데이터 (대시보드용)
   │   ├── axis4_sensitivity.csv
   │   └── axis5_consensus.csv
   ├── run_20260513_160415/
@@ -129,10 +130,21 @@ def run_all(data_dir, ml_dir, phase7_dir, results_base, memo=""):
     sep_df.to_csv(output / "axis2_separation.csv", index=False, encoding="utf-8-sig")
     print()
 
-    # --- 축 3: AUC ---
+    # --- 축 3: AUC + ROC curves ---
     auc_results = run_axis3(data_dir, ml_dir)
-    auc_df = pd.DataFrame(auc_results)
+    # roc_curves를 별도 추출 후 제거 (CSV에는 스칼라만 저장)
+    roc_curves_all = {}
+    auc_results_clean = []
+    for r in auc_results:
+        rc = r.pop("roc_curves", {})
+        cid, seg = r["commodity_id"], r["segment"]
+        roc_curves_all[f"{cid}_{seg}"] = rc
+        auc_results_clean.append(r)
+    auc_df = pd.DataFrame(auc_results_clean)
     auc_df.to_csv(output / "axis3_auc.csv", index=False, encoding="utf-8-sig")
+    # ROC curve 데이터 JSON 저장 (대시보드용)
+    with open(output / "axis3_roc_curves.json", "w", encoding="utf-8") as f:
+        json.dump(roc_curves_all, f)
     print()
 
     # --- 축 4: 민감도 ---
@@ -194,6 +206,10 @@ def run_all(data_dir, ml_dir, phase7_dir, results_base, memo=""):
     avg_cta = cons_df["cta"].mean()
     avg_asc = cons_df["asc"].dropna().mean()
 
+    # P_stat, P_ml 평균 (컬럼이 있을 때만)
+    avg_p_stat = cons_df["p_stat"].dropna().mean() if "p_stat" in cons_df.columns else np.nan
+    avg_p_ml = cons_df["p_ml"].dropna().mean() if "p_ml" in cons_df.columns else np.nan
+
     valid_cons = cons_df[cons_df["hypothesis_holds"].notna()]
     n_holds = int(valid_cons["hypothesis_holds"].sum()) if len(valid_cons) > 0 else 0
     n_valid = len(valid_cons)
@@ -208,6 +224,8 @@ def run_all(data_dir, ml_dir, phase7_dir, results_base, memo=""):
         "avg_k_sr": round(float(avg_k_sr), 4),
         "avg_cta": round(float(avg_cta), 4),
         "avg_asc": round(float(avg_asc), 4) if not np.isnan(avg_asc) else None,
+        "avg_p_stat": round(float(avg_p_stat), 4) if not np.isnan(avg_p_stat) else None,
+        "avg_p_ml": round(float(avg_p_ml), 4) if not np.isnan(avg_p_ml) else None,
         "hypothesis_holds": f"{n_holds}/{n_valid}",
     }
 
@@ -230,6 +248,7 @@ def run_all(data_dir, ml_dir, phase7_dir, results_base, memo=""):
             "axis1_esr.csv",
             "axis2_separation.csv",
             "axis3_auc.csv",
+            "axis3_roc_curves.json",
             "axis4_sensitivity.csv",
             "axis5_consensus.csv",
         ],
@@ -275,8 +294,11 @@ def run_all(data_dir, ml_dir, phase7_dir, results_base, memo=""):
     print("=== 축 5: 합의 기반 지표 ===")
     print(f"CTA 평균: {avg_cta:.4f}")
     print(f"ASC 평균: {avg_asc:.4f}")
-    print(f"핵심 가설 (ASC > max(ESR)) 성립: {n_holds}/{n_valid} 구간")
-    print(cons_df[["commodity_id", "segment", "cta", "asc", "esr_stat", "esr_ml", "hypothesis_holds"]].to_string(index=False))
+    if not np.isnan(avg_p_stat):
+        print(f"P_stat 평균: {avg_p_stat:.4f}")
+        print(f"P_ml 평균: {avg_p_ml:.4f}")
+    print(f"핵심 가설 (ASC > max(P_stat, P_ml)) 성립: {n_holds}/{n_valid} 구간")
+    print(cons_df[["commodity_id", "segment", "cta", "asc", "p_stat", "p_ml", "esr_stat", "esr_ml", "hypothesis_holds"]].to_string(index=False))
 
     print()
     log_eval(f"결과 저장: {output}")
