@@ -26,7 +26,7 @@ Phase 7-ML 공통 모듈 (phase7_ml_common.py)
 
 import pandas as pd
 import numpy as np
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import StandardScaler, RobustScaler
 from pathlib import Path
 
 
@@ -108,7 +108,6 @@ def preprocess_features(features_raw):
     X_scaled = scaler.fit_transform(features_valid.values)
 
     return X_scaled, valid_index, scaler
-
 
 # ---------------------------------------------------------------------------
 # stat_detected 조인

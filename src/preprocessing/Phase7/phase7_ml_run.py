@@ -77,8 +77,8 @@ def run_ml_segment(phase7_dir, output_base, cid, seg):
 
     # 학습된 모델 + 스케일러 저장 (재현/감사 용도)
     # 파일명에 실행 날짜를 포함하여 버전 관리
-    run_date = datetime.now().strftime("%Y%m%d")
-    models_dir = output_base / "models"
+    run_date = datetime.now().strftime("%Y%m%d_%H%M")
+    models_dir = output_base / "models" / run_date
     models_dir.mkdir(parents=True, exist_ok=True)
     joblib.dump(models["isolation_forest"], models_dir / f"{cid}_{seg}_if_{run_date}.pkl")
     joblib.dump(models["lof"], models_dir / f"{cid}_{seg}_lof_{run_date}.pkl")

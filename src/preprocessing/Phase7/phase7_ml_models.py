@@ -12,9 +12,9 @@ Phase 7-ML 모델 실행 + 앙상블 집계 (phase7_ml_models.py)
   predictions DataFrame: 3종 모델 판정 + 앙상블 결과
 
 모델 파라미터 (settings.py 기준):
-  IF:  n_estimators=100, contamination=0.10, random_state=42
-  LOF: n_neighbors=10, contamination=0.10, novelty=False
-  SVM: kernel='rbf', nu=0.10, gamma='scale'
+  IF:  n_estimators=100, contamination=0.08, random_state=42
+  LOF: n_neighbors=10, contamination=0.08, novelty=False
+  SVM: kernel='rbf', nu=0.08, gamma='scale'
 """
 
 import numpy as np
