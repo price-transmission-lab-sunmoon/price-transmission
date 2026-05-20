@@ -1,19 +1,21 @@
 """
-SHAP 대시보드 생성 (generate_shap_dashboard.py)
-================================================
+SHAP 대시보드 생성 (generate_shap_dashboard.py) v2
+===================================================
 역할:
   3종 모델(IF/LOF/SVM)의 SHAP 결과를 읽어
-  Bar Plot + Heatmap 시각화 대시보드 HTML을 생성한다.
+  Bar Plot + Heatmap + Beeswarm 시각화 대시보드 HTML + PNG를 생성한다.
 
-입력:
-  - tests/shap/results/{timestamp}_IF/   (shap_summary.csv + 개별 CSV + run_meta.json)
-  - tests/shap/results/{timestamp}_LOF/
-  - tests/shap/results/{timestamp}_SVM/
+시각화 구성:
+  Section 1: Global Feature Importance Bar Plot (3종 모델 비교)
+  Section 2: Per-Unit Top Feature Table
+  Section 3: SHAP Heatmap (시점 × 피처, percentile 클리핑 + 파랑-흰-빨강)
+  Section 4: Beeswarm Plots (matplotlib PNG, 모델별)
 
 출력:
   - tests/shap/results/대시보드_{YYYYMMDD_HHMM}/dashboard_shap.html
-
-위치: tests/shap/generate_shap_dashboard.py
+  - tests/shap/results/대시보드_{YYYYMMDD_HHMM}/beeswarm_IF.png
+  - tests/shap/results/대시보드_{YYYYMMDD_HHMM}/beeswarm_LOF.png
+  - tests/shap/results/대시보드_{YYYYMMDD_HHMM}/beeswarm_SVM.png
 
 실행:
   python tests/shap/generate_shap_dashboard.py --if-dir 20260519_1910_IF --lof-dir 20260519_2033_LOF --svm-dir 20260519_2041_SVM
@@ -23,8 +25,13 @@ import sys
 import os
 import json
 import argparse
+import base64
 import pandas as pd
 import numpy as np
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
 from pathlib import Path
 from datetime import datetime
 
@@ -43,9 +50,17 @@ FEATURE_LABELS = {
     "intl_price_usd_pct": "Intl. Price USD Change (%)",
 }
 
+FEATURE_LABELS_SHORT = {
+    "transmission_rate": "Transmission Rate",
+    "upstream_pct": "Upstream %",
+    "downstream_pct": "Downstream %",
+    "ect_or_spread": "ECT/Spread",
+    "exchange_rate_pct": "Exchange Rate %",
+    "intl_price_usd_pct": "Intl. Price USD %",
+}
+
 
 def load_model_data(results_base, dir_name):
-    """한 모델의 SHAP 결과를 로드한다."""
     d = Path(results_base) / dir_name
     if not d.exists():
         raise FileNotFoundError(f"디렉토리 없음: {d}")
@@ -57,7 +72,6 @@ def load_model_data(results_base, dir_name):
         with open(meta_path, "r", encoding="utf-8") as f:
             meta = json.load(f)
 
-    # 개별 SHAP CSV 로드 (heatmap용)
     shap_all = []
     for csv_file in sorted(d.glob("*_shap.csv")):
         if csv_file.name == "shap_summary.csv":
@@ -66,18 +80,107 @@ def load_model_data(results_base, dir_name):
         shap_all.append(df)
 
     shap_detail = pd.concat(shap_all, ignore_index=True) if shap_all else pd.DataFrame()
-
     return summary, meta, shap_detail
 
 
-def build_heatmap_data_js(shap_detail, model_name):
-    """heatmap용 JS 데이터 생성 — 품목×세그먼트별 드롭다운 선택."""
+# ---------------------------------------------------------------------------
+# Beeswarm PNG 생성
+# ---------------------------------------------------------------------------
+def generate_beeswarm_png(shap_detail, features_dir, model_name, output_path):
+    """
+    전체 유닛의 SHAP 값을 합쳐서 Beeswarm plot PNG를 생성한다.
+    X축: SHAP value, Y축: 피처 (중요도 순 정렬)
+    점 색상: 피처의 원시 값 (높으면 빨강, 낮으면 파랑)
+    """
+    if shap_detail.empty:
+        return
+
+    shap_vals = shap_detail[FEATURE_COLUMNS].values  # (N, 6)
+
+    # 원시 피처값 로드 (색상용)
+    raw_vals_all = []
+    for (cid, seg), group in shap_detail.groupby(["commodity_id", "segment"]):
+        feat_path = Path(features_dir) / f"{cid}_{seg}_features.csv"
+        if feat_path.exists():
+            feat_df = pd.read_csv(feat_path, encoding="utf-8-sig")
+            feat_df["date"] = pd.to_datetime(feat_df["date"])
+            group_dates = pd.to_datetime(group["date"])
+            merged = pd.merge(
+                pd.DataFrame({"date": group_dates}),
+                feat_df[["date"] + FEATURE_COLUMNS],
+                on="date", how="left"
+            )
+            raw_vals_all.append(merged[FEATURE_COLUMNS].values)
+        else:
+            raw_vals_all.append(np.full((len(group), len(FEATURE_COLUMNS)), np.nan))
+
+    raw_vals = np.vstack(raw_vals_all)  # (N, 6)
+
+    # 피처 중요도 순 정렬 (mean |SHAP| 내림차순)
+    mean_abs = np.abs(shap_vals).mean(axis=0)
+    order = np.argsort(mean_abs)  # 오름차순 (하단=가장 덜 중요, 상단=가장 중요)
+
+    fig, ax = plt.subplots(figsize=(10, 5))
+    fig.patch.set_facecolor("#0a0e17")
+    ax.set_facecolor("#0a0e17")
+
+    for i, feat_idx in enumerate(order):
+        sv = shap_vals[:, feat_idx]
+        rv = raw_vals[:, feat_idx]
+
+        # raw 값 정규화 (0~1) — 색상용
+        rv_min, rv_max = np.nanmin(rv), np.nanmax(rv)
+        if rv_max - rv_min > 0:
+            rv_norm = (rv - rv_min) / (rv_max - rv_min)
+        else:
+            rv_norm = np.full_like(rv, 0.5)
+        rv_norm = np.clip(np.nan_to_num(rv_norm, nan=0.5), 0, 1)
+
+        # jitter (겹침 방지)
+        jitter = np.random.RandomState(42).uniform(-0.3, 0.3, len(sv))
+
+        # 색상: 파랑(low) → 빨강(high)
+        cmap = plt.cm.coolwarm
+        colors = cmap(rv_norm)
+
+        ax.scatter(sv, np.full_like(sv, i) + jitter, c=colors, s=3, alpha=0.6, linewidths=0)
+
+    # Y축 라벨
+    y_labels = [FEATURE_LABELS_SHORT[FEATURE_COLUMNS[idx]] for idx in order]
+    ax.set_yticks(range(len(order)))
+    ax.set_yticklabels(y_labels, fontsize=10, color="#e2e8f0")
+
+    ax.axvline(0, color="#64748b", linewidth=0.5, linestyle="--")
+    ax.set_xlabel("SHAP Value (impact on anomaly score)", fontsize=11, color="#94a3b8")
+    ax.set_title(f"Beeswarm Plot — {model_name}", fontsize=14, fontweight="bold", color="#e2e8f0", pad=12)
+
+    ax.tick_params(axis="x", colors="#94a3b8", labelsize=9)
+    ax.tick_params(axis="y", colors="#e2e8f0")
+    for spine in ax.spines.values():
+        spine.set_color("#1e293b")
+
+    # 컬러바
+    sm = plt.cm.ScalarMappable(cmap=plt.cm.coolwarm, norm=plt.Normalize(0, 1))
+    sm.set_array([])
+    cbar = plt.colorbar(sm, ax=ax, fraction=0.02, pad=0.04)
+    cbar.set_label("Feature Value (normalized)", fontsize=9, color="#94a3b8")
+    cbar.ax.tick_params(labelsize=8, colors="#94a3b8")
+    cbar.outline.set_edgecolor("#1e293b")
+
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=150, facecolor="#0a0e17", bbox_inches="tight")
+    plt.close()
+    print(f"  Beeswarm 저장: {output_path}")
+
+
+# ---------------------------------------------------------------------------
+# HTML 생성
+# ---------------------------------------------------------------------------
+def build_heatmap_data_js(shap_detail):
     if shap_detail.empty:
         return "{}"
-
     units = shap_detail.groupby(["commodity_id", "segment"])
     heatmap_data = {}
-
     for (cid, seg), group in units:
         key = f"{cid}_{seg}"
         dates = pd.to_datetime(group["date"]).dt.strftime("%Y-%m").tolist()
@@ -85,24 +188,19 @@ def build_heatmap_data_js(shap_detail, model_name):
         for col in FEATURE_COLUMNS:
             features_data[col] = [round(v, 6) for v in group[col].values.tolist()]
         heatmap_data[key] = {"dates": dates, "features": features_data}
-
     return json.dumps(heatmap_data)
 
 
 def generate_html(if_summary, lof_summary, svm_summary,
                   if_meta, lof_meta, svm_meta,
                   if_detail, lof_detail, svm_detail,
-                  if_dir, lof_dir, svm_dir):
+                  if_dir, lof_dir, svm_dir,
+                  beeswarm_exists):
 
     timestamp_now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    # Bar Plot 데이터 (3종 모델의 글로벌 피처 중요도)
     def get_global_importance(summary):
-        result = []
-        for col in FEATURE_COLUMNS:
-            key = f"mean_abs_{col}"
-            result.append(round(summary[key].mean(), 6))
-        return result
+        return [round(summary[f"mean_abs_{c}"].mean(), 6) for c in FEATURE_COLUMNS]
 
     if_imp = get_global_importance(if_summary)
     lof_imp = get_global_importance(lof_summary)
@@ -113,30 +211,42 @@ def generate_html(if_summary, lof_summary, svm_summary,
     lof_imp_js = json.dumps(lof_imp)
     svm_imp_js = json.dumps(svm_imp)
 
-    # Per-unit top feature 테이블 데이터
     def unit_table_js(summary):
         rows = []
         for _, row in summary.iterrows():
-            rows.append({
-                "cid": row["commodity_id"],
-                "seg": row["segment"],
-                "top": row["top_feature"],
-                "imp": round(row["top_importance"], 4),
-            })
+            rows.append({"cid": row["commodity_id"], "seg": row["segment"],
+                         "top": row["top_feature"], "imp": round(row["top_importance"], 4)})
         return json.dumps(rows)
 
     if_units_js = unit_table_js(if_summary)
     lof_units_js = unit_table_js(lof_summary)
     svm_units_js = unit_table_js(svm_summary)
 
-    # Heatmap 데이터
-    if_heatmap_js = build_heatmap_data_js(if_detail, "IF")
-    lof_heatmap_js = build_heatmap_data_js(lof_detail, "LOF")
-    svm_heatmap_js = build_heatmap_data_js(svm_detail, "SVM")
+    if_heatmap_js = build_heatmap_data_js(if_detail)
+    lof_heatmap_js = build_heatmap_data_js(lof_detail)
+    svm_heatmap_js = build_heatmap_data_js(svm_detail)
 
-    # 유닛 목록
     units_list = if_summary[["commodity_id", "segment"]].apply(lambda r: f"{r.commodity_id}_{r.segment}", axis=1).tolist()
     units_js = json.dumps(units_list)
+
+    # Beeswarm section HTML
+    beeswarm_html = ""
+    if beeswarm_exists:
+        beeswarm_html = """
+<div class="section">
+  <div class="section-header">
+    <span class="section-number">4</span>
+    <span class="section-title">Beeswarm Plots (All Units Combined)</span>
+    <span class="section-desc">Each dot = one month of one commodity. Color = feature value (blue=low, red=high)</span>
+  </div>
+  <div class="chart-grid">
+    <div class="chart-card"><h3>Isolation Forest</h3><img src="beeswarm_IF.png" style="width:100%;border-radius:8px;"></div>
+    <div class="chart-card"><h3>Local Outlier Factor</h3><img src="beeswarm_LOF.png" style="width:100%;border-radius:8px;"></div>
+  </div>
+  <div style="margin-top:20px">
+    <div class="chart-card full"><h3>One-Class SVM</h3><img src="beeswarm_SVM.png" style="width:100%;border-radius:8px;"></div>
+  </div>
+</div>"""
 
     html = f"""<!DOCTYPE html>
 <html lang="ko">
@@ -171,18 +281,14 @@ body {{ font-family:'Noto Sans KR',sans-serif; background:var(--bg-primary); col
 .chart-card {{ background:var(--bg-card); border:1px solid var(--border); border-radius:12px; padding:24px; }}
 .chart-card.full {{ grid-column:1/-1; }}
 .chart-card h3 {{ font-size:13px; font-weight:500; color:var(--text-secondary); margin-bottom:16px; }}
-.chart-container {{ position:relative; width:100%; }}
-.chart-container.wide {{ height:400px; }}
-.chart-container.tall {{ height:500px; }}
+.chart-container.wide {{ position:relative; width:100%; height:400px; }}
+.chart-container.tall {{ position:relative; width:100%; height:500px; }}
 select.unit-select {{ background:var(--bg-primary); color:var(--text-primary); border:1px solid var(--border); border-radius:4px; padding:4px 8px; font-size:11px; font-family:'JetBrains Mono',monospace; margin-left:8px; }}
 table.eval {{ width:100%; border-collapse:collapse; font-size:11px; font-family:'JetBrains Mono',monospace; }}
 table.eval th {{ padding:8px 5px; font-weight:500; color:var(--text-muted); text-align:center; border-bottom:1px solid var(--border); font-size:10px; }}
 table.eval th:first-child {{ text-align:left; min-width:85px; }}
 table.eval td {{ padding:5px; text-align:center; border-bottom:1px solid rgba(30,41,59,0.5); }}
 table.eval td:first-child {{ text-align:left; font-weight:500; color:var(--text-secondary); }}
-.hl {{ display:inline-block; padding:1px 5px; border-radius:3px; font-weight:600; min-width:44px; font-size:11px; }}
-.hl-best {{ background:rgba(16,185,129,0.22); color:#6ee7b7; }}
-canvas.heatmap {{ image-rendering:pixelated; }}
 .footer {{ text-align:center; padding:32px 0; border-top:1px solid var(--border); color:var(--text-muted); font-size:12px; font-family:'JetBrains Mono',monospace; }}
 @media (max-width:1024px) {{ .chart-grid {{ grid-template-columns:1fr; }} }}
 </style>
@@ -202,19 +308,15 @@ canvas.heatmap {{ image-rendering:pixelated; }}
   <div class="source-row"><span class="badge badge-svm">SVM</span> {svm_dir} — {svm_meta.get('explainer','?')}, status: {svm_meta.get('status','?')}, {svm_meta.get('timestamp','?')}</div>
 </div>
 
-<!-- Section 1: Global Bar Plot -->
 <div class="section">
   <div class="section-header">
     <span class="section-number">1</span>
     <span class="section-title">Global Feature Importance (Mean |SHAP|)</span>
     <span class="section-desc">Average across all 20 commodity × segment units</span>
   </div>
-  <div class="chart-grid">
-    <div class="chart-card full"><div class="chart-container wide"><canvas id="global_bar"></canvas></div></div>
-  </div>
+  <div class="chart-card full"><div class="chart-container wide"><canvas id="global_bar"></canvas></div></div>
 </div>
 
-<!-- Section 2: Per-Unit Top Feature Table -->
 <div class="section">
   <div class="section-header">
     <span class="section-number">2</span>
@@ -224,12 +326,11 @@ canvas.heatmap {{ image-rendering:pixelated; }}
   <div class="chart-card full"><div id="unit_table"></div></div>
 </div>
 
-<!-- Section 3: Heatmap -->
 <div class="section">
   <div class="section-header">
     <span class="section-number">3</span>
     <span class="section-title">SHAP Heatmap (Time × Feature)</span>
-    <span class="section-desc">Select unit and model to view temporal SHAP contribution</span>
+    <span class="section-desc">Percentile-clipped (2nd~98th), Blue–White–Red diverging colormap</span>
   </div>
   <div class="chart-card full">
     <h3>
@@ -245,154 +346,121 @@ canvas.heatmap {{ image-rendering:pixelated; }}
   </div>
 </div>
 
+{beeswarm_html}
+
 <div class="footer">SHAP Feature Importance Dashboard · Sunmoon University Capstone Design 11-1 · {timestamp_now}</div>
 </div>
 
 <script>
 const FL={feature_labels_js};
 const FC={json.dumps(FEATURE_COLUMNS)};
-const C={{if:'#3b82f6',lof:'#06b6d4',svm:'#8b5cf6'}};
+const C_={{if:'#3b82f6',lof:'#06b6d4',svm:'#8b5cf6'}};
 
-// === Section 1: Global Bar Plot ===
-const ifImp={if_imp_js}, lofImp={lof_imp_js}, svmImp={svm_imp_js};
+// === Section 1 ===
 new Chart(document.getElementById('global_bar'),{{
   type:'bar',
-  data:{{
-    labels:FL,
-    datasets:[
-      {{label:'Isolation Forest',data:ifImp,backgroundColor:C.if+'99',borderColor:C.if,borderWidth:1,borderRadius:3}},
-      {{label:'Local Outlier Factor',data:lofImp,backgroundColor:C.lof+'99',borderColor:C.lof,borderWidth:1,borderRadius:3}},
-      {{label:'One-Class SVM',data:svmImp,backgroundColor:C.svm+'99',borderColor:C.svm,borderWidth:1,borderRadius:3}},
-    ]
-  }},
-  options:{{
-    responsive:true,maintainAspectRatio:false,
-    plugins:{{legend:{{position:'top',labels:{{boxWidth:12,color:'#94a3b8'}}}}}},
-    scales:{{
-      x:{{ticks:{{font:{{size:10}},color:'#94a3b8'}}}},
-      y:{{title:{{display:true,text:'Mean |SHAP Value|',color:'#94a3b8'}},ticks:{{color:'#94a3b8'}}}},
-    }}
-  }}
+  data:{{labels:FL,datasets:[
+    {{label:'Isolation Forest',data:{if_imp_js},backgroundColor:C_.if+'99',borderColor:C_.if,borderWidth:1,borderRadius:3}},
+    {{label:'Local Outlier Factor',data:{lof_imp_js},backgroundColor:C_.lof+'99',borderColor:C_.lof,borderWidth:1,borderRadius:3}},
+    {{label:'One-Class SVM',data:{svm_imp_js},backgroundColor:C_.svm+'99',borderColor:C_.svm,borderWidth:1,borderRadius:3}},
+  ]}},
+  options:{{responsive:true,maintainAspectRatio:false,plugins:{{legend:{{position:'top',labels:{{boxWidth:12,color:'#94a3b8'}}}}}},scales:{{x:{{ticks:{{font:{{size:10}},color:'#94a3b8'}}}},y:{{title:{{display:true,text:'Mean |SHAP Value|',color:'#94a3b8'}},ticks:{{color:'#94a3b8'}}}}}}}}
 }});
 
-// === Section 2: Per-Unit Top Feature Table ===
-const ifU={if_units_js}, lofU={lof_units_js}, svmU={svm_units_js};
+// === Section 2 ===
+const ifU={if_units_js},lofU={lof_units_js},svmU={svm_units_js};
 let tH='<table class="eval"><thead><tr><th>Commodity</th><th>Isolation Forest</th><th>Imp.</th><th>Local Outlier Factor</th><th>Imp.</th><th>One-Class SVM</th><th>Imp.</th></tr></thead><tbody>';
-for(let i=0;i<ifU.length;i++){{
-  const a=ifU[i],b=lofU[i],c=svmU[i];
-  tH+=`<tr><td>${{a.cid}} ${{a.seg}}</td><td>${{a.top}}</td><td>${{a.imp.toFixed(4)}}</td><td>${{b.top}}</td><td>${{b.imp.toFixed(4)}}</td><td>${{c.top}}</td><td>${{c.imp.toFixed(4)}}</td></tr>`;
-}}
-tH+='</tbody></table>';
-document.getElementById('unit_table').innerHTML=tH;
+for(let i=0;i<ifU.length;i++){{const a=ifU[i],b=lofU[i],c=svmU[i];tH+=`<tr><td>${{a.cid}} ${{a.seg}}</td><td>${{a.top}}</td><td>${{a.imp.toFixed(4)}}</td><td>${{b.top}}</td><td>${{b.imp.toFixed(4)}}</td><td>${{c.top}}</td><td>${{c.imp.toFixed(4)}}</td></tr>`;}}
+tH+='</tbody></table>';document.getElementById('unit_table').innerHTML=tH;
 
-// === Section 3: Heatmap ===
+// === Section 3: Heatmap (percentile-clipped, blue-white-red) ===
 const hmData={{IF:{if_heatmap_js},LOF:{lof_heatmap_js},SVM:{svm_heatmap_js}}};
 const units={units_js};
-const hmUnitSel=document.getElementById('hm_unit');
-const hmModelSel=document.getElementById('hm_model');
-units.forEach(u=>{{const o=document.createElement('option');o.value=u;o.textContent=u.replace('_',' ');hmUnitSel.appendChild(o);}});
+const hmUS=document.getElementById('hm_unit'),hmMS=document.getElementById('hm_model');
+units.forEach(u=>{{const o=document.createElement('option');o.value=u;o.textContent=u.replace('_',' ');hmUS.appendChild(o);}});
 
-let hmChart=null;
 function drawHeatmap(){{
-  const unit=hmUnitSel.value;
-  const model=hmModelSel.value;
-  const d=hmData[model];
-  if(!d||!d[unit])return;
-  const ud=d[unit];
-  const dates=ud.dates;
-  const features=ud.features;
+  const unit=hmUS.value,model=hmMS.value;
+  const d=hmData[model];if(!d||!d[unit])return;
+  const ud=d[unit],dates=ud.dates,features=ud.features;
 
-  // Build datasets: one per feature, x=date index, y=feature index, color=shap value
-  const dataPoints=[];
-  let maxAbs=0;
-  FC.forEach((f,fi)=>{{
-    features[f].forEach((v,di)=>{{
-      dataPoints.push({{x:di,y:fi,v:v}});
-      if(Math.abs(v)>maxAbs)maxAbs=Math.abs(v);
-    }});
-  }});
+  // Collect all values for percentile clipping
+  const allVals=[];
+  FC.forEach(f=>features[f].forEach(v=>allVals.push(v)));
+  allVals.sort((a,b)=>a-b);
+  const p2=allVals[Math.floor(allVals.length*0.02)];
+  const p98=allVals[Math.floor(allVals.length*0.98)];
+  const clipMax=Math.max(Math.abs(p2),Math.abs(p98));
 
-  // Draw on canvas manually
   const canvas=document.getElementById('heatmap_canvas');
   const ctx=canvas.getContext('2d');
   const rect=canvas.parentElement.getBoundingClientRect();
-  canvas.width=rect.width;
-  canvas.height=rect.height;
+  canvas.width=rect.width;canvas.height=rect.height;
 
-  const marginLeft=140,marginRight=20,marginTop=30,marginBottom=60;
-  const plotW=canvas.width-marginLeft-marginRight;
-  const plotH=canvas.height-marginTop-marginBottom;
-  const nDates=dates.length;
-  const nFeatures=FC.length;
-  const cellW=plotW/nDates;
-  const cellH=plotH/nFeatures;
+  const mL=160,mR=20,mT=30,mB=60;
+  const pW=canvas.width-mL-mR,pH=canvas.height-mT-mB;
+  const nD=dates.length,nF=FC.length;
+  const cW=pW/nD,cH=pH/nF;
 
   ctx.clearRect(0,0,canvas.width,canvas.height);
 
-  // Color function: blue(negative) — black(zero) — red(positive)
+  // Blue-White-Red diverging colormap
   function valColor(v){{
-    const t=maxAbs>0?v/maxAbs:0;
-    if(t>=0){{
-      const r=Math.round(55+200*t);
-      const g=Math.round(20+20*t);
-      const b=Math.round(20+20*t);
-      return`rgb(${{r}},${{g}},${{b}})`;
-    }}else{{
+    const clamped=Math.max(-clipMax,Math.min(clipMax,v));
+    const t=clipMax>0?clamped/clipMax:0; // -1 to 1
+    let r,g,b;
+    if(t>=0){{ // white → red
+      r=255;
+      g=Math.round(255*(1-t));
+      b=Math.round(255*(1-t));
+    }}else{{ // white → blue
       const at=-t;
-      const r=Math.round(20+20*at);
-      const g=Math.round(40+60*at);
-      const b=Math.round(80+175*at);
-      return`rgb(${{r}},${{g}},${{b}})`;
+      r=Math.round(255*(1-at));
+      g=Math.round(255*(1-at));
+      b=255;
     }}
+    return`rgb(${{r}},${{g}},${{b}})`;
   }}
 
   // Draw cells
-  dataPoints.forEach(p=>{{
-    const x=marginLeft+p.x*cellW;
-    const y=marginTop+p.y*cellH;
-    ctx.fillStyle=valColor(p.v);
-    ctx.fillRect(x,y,Math.ceil(cellW),Math.ceil(cellH));
+  FC.forEach((f,fi)=>{{
+    features[f].forEach((v,di)=>{{
+      ctx.fillStyle=valColor(v);
+      ctx.fillRect(mL+di*cW,mT+fi*cH,Math.ceil(cW),Math.ceil(cH));
+    }});
   }});
 
-  // Y-axis labels (features)
-  ctx.fillStyle='#94a3b8';
-  ctx.font='11px JetBrains Mono';
-  ctx.textAlign='right';
-  ctx.textBaseline='middle';
-  FC.forEach((f,i)=>{{
-    ctx.fillText(FL[i],marginLeft-8,marginTop+i*cellH+cellH/2);
-  }});
+  // Y labels
+  ctx.fillStyle='#e2e8f0';ctx.font='11px JetBrains Mono';ctx.textAlign='right';ctx.textBaseline='middle';
+  FC.forEach((f,i)=>ctx.fillText(FL[i],mL-8,mT+i*cH+cH/2));
 
-  // X-axis labels (dates — sample every N)
-  ctx.textAlign='center';
-  ctx.textBaseline='top';
-  const step=Math.max(1,Math.floor(nDates/15));
-  for(let i=0;i<nDates;i+=step){{
-    ctx.save();
-    ctx.translate(marginLeft+i*cellW+cellW/2, marginTop+plotH+8);
-    ctx.rotate(-Math.PI/4);
-    ctx.fillText(dates[i],0,0);
-    ctx.restore();
+  // X labels
+  ctx.fillStyle='#94a3b8';ctx.textAlign='center';ctx.textBaseline='top';
+  const step=Math.max(1,Math.floor(nD/15));
+  for(let i=0;i<nD;i+=step){{
+    ctx.save();ctx.translate(mL+i*cW+cW/2,mT+pH+8);ctx.rotate(-Math.PI/4);
+    ctx.fillText(dates[i],0,0);ctx.restore();
   }}
 
   // Title
-  ctx.fillStyle='#e2e8f0';
-  ctx.font='13px Noto Sans KR';
-  ctx.textAlign='center';
-  ctx.textBaseline='top';
+  ctx.fillStyle='#e2e8f0';ctx.font='13px Noto Sans KR';ctx.textAlign='center';ctx.textBaseline='top';
   ctx.fillText(unit.replace('_',' ')+' — '+model,canvas.width/2,4);
 
-  // Legend
-  document.getElementById('heatmap_legend').innerHTML=
-    `<span style="color:#3b7dff">■ Negative SHAP</span> &nbsp; `+
-    `<span style="color:#333">■ Zero</span> &nbsp; `+
-    `<span style="color:#e03030">■ Positive SHAP</span> &nbsp; `+
-    `| Max |SHAP| = ${{maxAbs.toFixed(4)}}`;
+  // Legend with gradient
+  const gW=200,gH=12,gX=(canvas.width-gW)/2,gY=mT+pH+48;
+  const grad=ctx.createLinearGradient(gX,0,gX+gW,0);
+  grad.addColorStop(0,'rgb(0,0,255)');grad.addColorStop(0.5,'rgb(255,255,255)');grad.addColorStop(1,'rgb(255,0,0)');
+  ctx.fillStyle=grad;ctx.fillRect(gX,gY,gW,gH);
+  ctx.strokeStyle='#64748b';ctx.strokeRect(gX,gY,gW,gH);
+
+  ctx.fillStyle='#94a3b8';ctx.font='10px JetBrains Mono';ctx.textAlign='center';ctx.textBaseline='top';
+  ctx.fillText('-'+clipMax.toFixed(2),gX,gY+gH+4);
+  ctx.fillText('0',gX+gW/2,gY+gH+4);
+  ctx.fillText('+'+clipMax.toFixed(2),gX+gW,gY+gH+4);
+  ctx.fillText('SHAP Value (clipped 2nd~98th percentile)',canvas.width/2,gY+gH+18);
 }}
 
-hmUnitSel.addEventListener('change',drawHeatmap);
-hmModelSel.addEventListener('change',drawHeatmap);
-// Initial draw after page load
+hmUS.addEventListener('change',drawHeatmap);hmMS.addEventListener('change',drawHeatmap);
 setTimeout(drawHeatmap,100);
 </script>
 </body>
@@ -402,12 +470,13 @@ setTimeout(drawHeatmap,100);
 
 def main():
     parser = argparse.ArgumentParser(description="SHAP 대시보드 생성")
-    parser.add_argument("--if-dir", type=str, required=True, help="IF 결과 폴더명 (예: 20260519_1910_IF)")
-    parser.add_argument("--lof-dir", type=str, required=True, help="LOF 결과 폴더명 (예: 20260519_2033_LOF)")
-    parser.add_argument("--svm-dir", type=str, required=True, help="SVM 결과 폴더명 (예: 20260519_2041_SVM)")
+    parser.add_argument("--if-dir", type=str, required=True)
+    parser.add_argument("--lof-dir", type=str, required=True)
+    parser.add_argument("--svm-dir", type=str, required=True)
     args = parser.parse_args()
 
     results_base = Path(os.path.dirname(os.path.abspath(__file__))) / "results"
+    features_dir = Path(os.path.dirname(os.path.abspath(__file__))) / ".." / ".." / "data" / "processed" / "phase7_ml" / "features"
 
     print("[SHAP-Dashboard] 데이터 로딩...")
     if_summary, if_meta, if_detail = load_model_data(results_base, args.if_dir)
@@ -417,22 +486,39 @@ def main():
     print(f"  LOF: {len(lof_summary)} units, {len(lof_detail)} rows")
     print(f"  SVM: {len(svm_summary)} units, {len(svm_detail)} rows")
 
+    # 출력 디렉토리
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M")
+    output_dir = results_base / f"대시보드_{timestamp}"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Beeswarm PNG 생성
+    print("[SHAP-Dashboard] Beeswarm PNG 생성...")
+    beeswarm_ok = True
+    try:
+        generate_beeswarm_png(if_detail, features_dir, "Isolation Forest", output_dir / "beeswarm_IF.png")
+        generate_beeswarm_png(lof_detail, features_dir, "Local Outlier Factor", output_dir / "beeswarm_LOF.png")
+        generate_beeswarm_png(svm_detail, features_dir, "One-Class SVM", output_dir / "beeswarm_SVM.png")
+    except Exception as e:
+        print(f"  [WARNING] Beeswarm 생성 실패: {e}")
+        beeswarm_ok = False
+
+    # HTML 생성
+    print("[SHAP-Dashboard] HTML 생성...")
     html = generate_html(
         if_summary, lof_summary, svm_summary,
         if_meta, lof_meta, svm_meta,
         if_detail, lof_detail, svm_detail,
         args.if_dir, args.lof_dir, args.svm_dir,
+        beeswarm_ok,
     )
 
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M")
-    output_dir = results_base / f"대시보드_{timestamp}"
-    output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / "dashboard_shap.html"
-
     with open(output_path, "w", encoding="utf-8") as f:
         f.write(html)
 
     print(f"[SHAP-Dashboard] 생성 완료: {output_path}")
+    if beeswarm_ok:
+        print(f"  Beeswarm PNGs: {output_dir}/beeswarm_*.png")
 
 
 if __name__ == "__main__":
