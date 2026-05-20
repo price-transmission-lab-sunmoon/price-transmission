@@ -176,7 +176,7 @@ def generate_beeswarm_png(shap_detail, features_dir, model_name, output_path):
 # ---------------------------------------------------------------------------
 # HTML 생성
 # ---------------------------------------------------------------------------
-def build_heatmap_data_js(shap_detail):
+def build_heatmap_data_js(shap_detail, predictions_dir=None):
     if shap_detail.empty:
         return "{}"
     units = shap_detail.groupby(["commodity_id", "segment"])
@@ -187,7 +187,19 @@ def build_heatmap_data_js(shap_detail):
         features_data = {}
         for col in FEATURE_COLUMNS:
             features_data[col] = [round(v, 6) for v in group[col].values.tolist()]
-        heatmap_data[key] = {"dates": dates, "features": features_data}
+
+        # ml_detected 인덱스 (이상치 필터용)
+        anomaly_indices = []
+        if predictions_dir:
+            pred_path = Path(predictions_dir) / f"{cid}_{seg}_ml_predictions.csv"
+            if pred_path.exists():
+                pred_df = pd.read_csv(pred_path, encoding="utf-8-sig")
+                pred_df["date"] = pd.to_datetime(pred_df["date"]).dt.strftime("%Y-%m")
+                group_dates_str = pd.to_datetime(group["date"]).dt.strftime("%Y-%m").tolist()
+                detected_dates = set(pred_df[pred_df["ml_detected"] == True]["date"].tolist())
+                anomaly_indices = [i for i, d in enumerate(group_dates_str) if d in detected_dates]
+
+        heatmap_data[key] = {"dates": dates, "features": features_data, "anomaly": anomaly_indices}
     return json.dumps(heatmap_data)
 
 
@@ -195,7 +207,7 @@ def generate_html(if_summary, lof_summary, svm_summary,
                   if_meta, lof_meta, svm_meta,
                   if_detail, lof_detail, svm_detail,
                   if_dir, lof_dir, svm_dir,
-                  beeswarm_exists):
+                  beeswarm_exists, predictions_dir=None):
 
     timestamp_now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -222,9 +234,9 @@ def generate_html(if_summary, lof_summary, svm_summary,
     lof_units_js = unit_table_js(lof_summary)
     svm_units_js = unit_table_js(svm_summary)
 
-    if_heatmap_js = build_heatmap_data_js(if_detail)
-    lof_heatmap_js = build_heatmap_data_js(lof_detail)
-    svm_heatmap_js = build_heatmap_data_js(svm_detail)
+    if_heatmap_js = build_heatmap_data_js(if_detail, predictions_dir)
+    lof_heatmap_js = build_heatmap_data_js(lof_detail, predictions_dir)
+    svm_heatmap_js = build_heatmap_data_js(svm_detail, predictions_dir)
 
     units_list = if_summary[["commodity_id", "segment"]].apply(lambda r: f"{r.commodity_id}_{r.segment}", axis=1).tolist()
     units_js = json.dumps(units_list)
@@ -340,8 +352,12 @@ table.eval td:first-child {{ text-align:left; font-weight:500; color:var(--text-
         <option value="LOF">Local Outlier Factor</option>
         <option value="SVM">One-Class SVM</option>
       </select>
+      <button id="hm_toggle" style="margin-left:12px;background:rgba(59,130,246,0.15);color:#3b82f6;border:1px solid rgba(59,130,246,0.3);border-radius:4px;padding:4px 12px;font-size:11px;font-family:'JetBrains Mono',monospace;cursor:pointer;">Show: All Months</button>
     </h3>
-    <div class="chart-container tall"><canvas id="heatmap_canvas"></canvas></div>
+    <div style="position:relative;">
+      <div class="chart-container tall"><canvas id="heatmap_canvas"></canvas></div>
+      <div id="hm_tooltip" style="display:none;position:absolute;background:rgba(17,24,39,0.95);border:1px solid #3b82f6;border-radius:6px;padding:8px 12px;font-family:'JetBrains Mono',monospace;font-size:11px;color:#e2e8f0;pointer-events:none;z-index:10;white-space:nowrap;"></div>
+    </div>
     <div id="heatmap_legend" style="margin-top:12px;text-align:center;font-size:11px;color:var(--text-muted);font-family:'JetBrains Mono',monospace;"></div>
   </div>
 </div>
@@ -373,52 +389,71 @@ let tH='<table class="eval"><thead><tr><th>Commodity</th><th>Isolation Forest</t
 for(let i=0;i<ifU.length;i++){{const a=ifU[i],b=lofU[i],c=svmU[i];tH+=`<tr><td>${{a.cid}} ${{a.seg}}</td><td>${{a.top}}</td><td>${{a.imp.toFixed(4)}}</td><td>${{b.top}}</td><td>${{b.imp.toFixed(4)}}</td><td>${{c.top}}</td><td>${{c.imp.toFixed(4)}}</td></tr>`;}}
 tH+='</tbody></table>';document.getElementById('unit_table').innerHTML=tH;
 
-// === Section 3: Heatmap (percentile-clipped, blue-white-red) ===
+// === Section 3: Heatmap (percentile-clipped, blue-white-red, tooltip, anomaly filter) ===
 const hmData={{IF:{if_heatmap_js},LOF:{lof_heatmap_js},SVM:{svm_heatmap_js}}};
 const units={units_js};
 const hmUS=document.getElementById('hm_unit'),hmMS=document.getElementById('hm_model');
+const hmToggle=document.getElementById('hm_toggle');
+const hmTooltip=document.getElementById('hm_tooltip');
 units.forEach(u=>{{const o=document.createElement('option');o.value=u;o.textContent=u.replace('_',' ');hmUS.appendChild(o);}});
+
+let hmShowAll=true;
+// Store current heatmap state for tooltip
+let hmState={{mL:0,mT:0,cW:0,cH:0,nD:0,nF:0,dates:[],clipMax:0,features:{{}},filteredIndices:null}};
+
+hmToggle.addEventListener('click',()=>{{
+  hmShowAll=!hmShowAll;
+  hmToggle.textContent=hmShowAll?'Show: All Months':'Show: Anomaly Months Only';
+  hmToggle.style.background=hmShowAll?'rgba(59,130,246,0.15)':'rgba(16,185,129,0.15)';
+  hmToggle.style.color=hmShowAll?'#3b82f6':'#10b981';
+  hmToggle.style.borderColor=hmShowAll?'rgba(59,130,246,0.3)':'rgba(16,185,129,0.3)';
+  drawHeatmap();
+}});
 
 function drawHeatmap(){{
   const unit=hmUS.value,model=hmMS.value;
   const d=hmData[model];if(!d||!d[unit])return;
-  const ud=d[unit],dates=ud.dates,features=ud.features;
+  const ud=d[unit];
+  let dates=ud.dates,features=ud.features,anomalyIdx=ud.anomaly||[];
 
-  // Collect all values for percentile clipping
+  // Filter to anomaly months only if toggled
+  let filteredIndices=null;
+  if(!hmShowAll&&anomalyIdx.length>0){{
+    filteredIndices=anomalyIdx;
+    dates=anomalyIdx.map(i=>ud.dates[i]);
+    features={{}};
+    FC.forEach(f=>{{features[f]=anomalyIdx.map(i=>ud.features[f][i]);}});
+  }}
+
+  // Percentile clipping
   const allVals=[];
   FC.forEach(f=>features[f].forEach(v=>allVals.push(v)));
   allVals.sort((a,b)=>a-b);
   const p2=allVals[Math.floor(allVals.length*0.02)];
   const p98=allVals[Math.floor(allVals.length*0.98)];
-  const clipMax=Math.max(Math.abs(p2),Math.abs(p98));
+  const clipMax=Math.max(Math.abs(p2),Math.abs(p98))||1;
 
   const canvas=document.getElementById('heatmap_canvas');
   const ctx=canvas.getContext('2d');
   const rect=canvas.parentElement.getBoundingClientRect();
   canvas.width=rect.width;canvas.height=rect.height;
 
-  const mL=160,mR=20,mT=30,mB=60;
+  const mL=160,mR=20,mT=30,mB=80;
   const pW=canvas.width-mL-mR,pH=canvas.height-mT-mB;
   const nD=dates.length,nF=FC.length;
   const cW=pW/nD,cH=pH/nF;
 
+  // Store state for tooltip
+  hmState={{mL,mT,cW,cH,nD,nF,dates,clipMax,features,filteredIndices}};
+
   ctx.clearRect(0,0,canvas.width,canvas.height);
 
-  // Blue-White-Red diverging colormap
   function valColor(v){{
     const clamped=Math.max(-clipMax,Math.min(clipMax,v));
-    const t=clipMax>0?clamped/clipMax:0; // -1 to 1
+    const t=clipMax>0?clamped/clipMax:0;
     let r,g,b;
-    if(t>=0){{ // white → red
-      r=255;
-      g=Math.round(255*(1-t));
-      b=Math.round(255*(1-t));
-    }}else{{ // white → blue
-      const at=-t;
-      r=Math.round(255*(1-at));
-      g=Math.round(255*(1-at));
-      b=255;
-    }}
+    if(t>=0){{r=255;g=Math.round(255*(1-t));b=Math.round(255*(1-t));}}
+    else{{const at=-t;r=Math.round(255*(1-at));g=Math.round(255*(1-at));b=255;}}
     return`rgb(${{r}},${{g}},${{b}})`;
   }}
 
@@ -426,7 +461,7 @@ function drawHeatmap(){{
   FC.forEach((f,fi)=>{{
     features[f].forEach((v,di)=>{{
       ctx.fillStyle=valColor(v);
-      ctx.fillRect(mL+di*cW,mT+fi*cH,Math.ceil(cW),Math.ceil(cH));
+      ctx.fillRect(mL+di*cW,mT+fi*cH,Math.ceil(cW)+0.5,Math.ceil(cH)+0.5);
     }});
   }});
 
@@ -436,18 +471,20 @@ function drawHeatmap(){{
 
   // X labels
   ctx.fillStyle='#94a3b8';ctx.textAlign='center';ctx.textBaseline='top';
-  const step=Math.max(1,Math.floor(nD/15));
+  const maxLabels=hmShowAll?15:Math.min(nD,30);
+  const step=Math.max(1,Math.floor(nD/maxLabels));
   for(let i=0;i<nD;i+=step){{
     ctx.save();ctx.translate(mL+i*cW+cW/2,mT+pH+8);ctx.rotate(-Math.PI/4);
     ctx.fillText(dates[i],0,0);ctx.restore();
   }}
 
   // Title
+  const modeLabel=hmShowAll?'All Months':'Anomaly Months ('+nD+')';
   ctx.fillStyle='#e2e8f0';ctx.font='13px Noto Sans KR';ctx.textAlign='center';ctx.textBaseline='top';
-  ctx.fillText(unit.replace('_',' ')+' — '+model,canvas.width/2,4);
+  ctx.fillText(unit.replace('_',' ')+' — '+model+' — '+modeLabel,canvas.width/2,4);
 
-  // Legend with gradient
-  const gW=200,gH=12,gX=(canvas.width-gW)/2,gY=mT+pH+48;
+  // Legend gradient
+  const gW=200,gH=12,gX=(canvas.width-gW)/2,gY=mT+pH+52;
   const grad=ctx.createLinearGradient(gX,0,gX+gW,0);
   grad.addColorStop(0,'rgb(0,0,255)');grad.addColorStop(0.5,'rgb(255,255,255)');grad.addColorStop(1,'rgb(255,0,0)');
   ctx.fillStyle=grad;ctx.fillRect(gX,gY,gW,gH);
@@ -459,6 +496,42 @@ function drawHeatmap(){{
   ctx.fillText('+'+clipMax.toFixed(2),gX+gW,gY+gH+4);
   ctx.fillText('SHAP Value (clipped 2nd~98th percentile)',canvas.width/2,gY+gH+18);
 }}
+
+// Tooltip on mousemove
+document.getElementById('heatmap_canvas').addEventListener('mousemove',(e)=>{{
+  const canvas=e.target;
+  const rect=canvas.getBoundingClientRect();
+  const mx=e.clientX-rect.left;
+  const my=e.clientY-rect.top;
+  const s=hmState;
+
+  const di=Math.floor((mx-s.mL)/s.cW);
+  const fi=Math.floor((my-s.mT)/s.cH);
+
+  if(di>=0&&di<s.nD&&fi>=0&&fi<s.nF){{
+    const date=s.dates[di];
+    const feat=FC[fi];
+    const featLabel=FL[fi];
+    const val=s.features[feat][di];
+
+    hmTooltip.style.display='block';
+    hmTooltip.innerHTML=`<div style="color:#3b82f6;font-weight:700;margin-bottom:2px">${{date}}</div><div>${{featLabel}}</div><div style="margin-top:4px;font-size:13px;font-weight:700;color:${{val>=0?'#ef4444':'#3b82f6'}}">${{val>=0?'+':''}}${{val.toFixed(4)}}</div>`;
+
+    // Position tooltip
+    let tx=e.clientX-rect.left+16;
+    let ty=e.clientY-rect.top-10;
+    if(tx+180>canvas.width)tx=tx-196;
+    if(ty<0)ty=10;
+    hmTooltip.style.left=tx+'px';
+    hmTooltip.style.top=ty+'px';
+  }}else{{
+    hmTooltip.style.display='none';
+  }}
+}});
+
+document.getElementById('heatmap_canvas').addEventListener('mouseleave',()=>{{
+  hmTooltip.style.display='none';
+}});
 
 hmUS.addEventListener('change',drawHeatmap);hmMS.addEventListener('change',drawHeatmap);
 setTimeout(drawHeatmap,100);
@@ -477,6 +550,7 @@ def main():
 
     results_base = Path(os.path.dirname(os.path.abspath(__file__))) / "results"
     features_dir = Path(os.path.dirname(os.path.abspath(__file__))) / ".." / ".." / "data" / "processed" / "phase7_ml" / "features"
+    predictions_dir = Path(os.path.dirname(os.path.abspath(__file__))) / ".." / ".." / "data" / "processed" / "phase7_ml" / "predictions"
 
     print("[SHAP-Dashboard] 데이터 로딩...")
     if_summary, if_meta, if_detail = load_model_data(results_base, args.if_dir)
@@ -509,7 +583,7 @@ def main():
         if_meta, lof_meta, svm_meta,
         if_detail, lof_detail, svm_detail,
         args.if_dir, args.lof_dir, args.svm_dir,
-        beeswarm_ok,
+        beeswarm_ok, predictions_dir=str(predictions_dir),
     )
 
     output_path = output_dir / "dashboard_shap.html"
