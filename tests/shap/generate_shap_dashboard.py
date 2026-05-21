@@ -226,8 +226,11 @@ def generate_html(if_summary, lof_summary, svm_summary,
     def unit_table_js(summary):
         rows = []
         for _, row in summary.iterrows():
+            total = sum(row[f"mean_abs_{c}"] for c in FEATURE_COLUMNS)
+            pct = round(row["top_importance"] / total * 100, 1) if total > 0 else 0
             rows.append({"cid": row["commodity_id"], "seg": row["segment"],
-                         "top": row["top_feature"], "imp": round(row["top_importance"], 4)})
+                         "top": row["top_feature"], "imp": round(row["top_importance"], 4),
+                         "pct": pct})
         return json.dumps(rows)
 
     if_units_js = unit_table_js(if_summary)
@@ -401,8 +404,8 @@ new Chart(document.getElementById('global_bar_norm'),{{
 
 // === Section 2 ===
 const ifU={if_units_js},lofU={lof_units_js},svmU={svm_units_js};
-let tH='<table class="eval"><thead><tr><th>Commodity</th><th>Isolation Forest</th><th>Imp.</th><th>Local Outlier Factor</th><th>Imp.</th><th>One-Class SVM</th><th>Imp.</th></tr></thead><tbody>';
-for(let i=0;i<ifU.length;i++){{const a=ifU[i],b=lofU[i],c=svmU[i];tH+=`<tr><td>${{a.cid}} ${{a.seg}}</td><td>${{a.top}}</td><td>${{a.imp.toFixed(4)}}</td><td>${{b.top}}</td><td>${{b.imp.toFixed(4)}}</td><td>${{c.top}}</td><td>${{c.imp.toFixed(4)}}</td></tr>`;}}
+let tH='<table class="eval"><thead><tr><th>Commodity</th><th>Isolation Forest</th><th>Share</th><th>Local Outlier Factor</th><th>Share</th><th>One-Class SVM</th><th>Share</th></tr></thead><tbody>';
+for(let i=0;i<ifU.length;i++){{const a=ifU[i],b=lofU[i],c=svmU[i];tH+=`<tr><td>${{a.cid}} ${{a.seg}}</td><td>${{a.top}}</td><td>${{a.pct.toFixed(1)}}%</td><td>${{b.top}}</td><td>${{b.pct.toFixed(1)}}%</td><td>${{c.top}}</td><td>${{c.pct.toFixed(1)}}%</td></tr>`;}}
 tH+='</tbody></table>';document.getElementById('unit_table').innerHTML=tH;
 
 // === Section 3: Heatmap (percentile-clipped, blue-white-red, tooltip, anomaly filter) ===
