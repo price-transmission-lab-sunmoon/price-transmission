@@ -326,7 +326,10 @@ table.eval td:first-child {{ text-align:left; font-weight:500; color:var(--text-
     <span class="section-title">Global Feature Importance (Mean |SHAP|)</span>
     <span class="section-desc">Average across all 20 commodity × segment units</span>
   </div>
-  <div class="chart-card full"><div class="chart-container wide"><canvas id="global_bar"></canvas></div></div>
+  <div class="chart-grid">
+    <div class="chart-card"><h3>Absolute Values (raw scale — not comparable across models)</h3><div class="chart-container wide"><canvas id="global_bar"></canvas></div></div>
+    <div class="chart-card"><h3>Normalized Proportion (sum=1 per model — cross-model comparable)</h3><div class="chart-container wide"><canvas id="global_bar_norm"></canvas></div></div>
+  </div>
 </div>
 
 <div class="section">
@@ -372,7 +375,7 @@ const FL={feature_labels_js};
 const FC={json.dumps(FEATURE_COLUMNS)};
 const C_={{if:'#3b82f6',lof:'#06b6d4',svm:'#8b5cf6'}};
 
-// === Section 1 ===
+// === Section 1: Absolute ===
 new Chart(document.getElementById('global_bar'),{{
   type:'bar',
   data:{{labels:FL,datasets:[
@@ -381,6 +384,19 @@ new Chart(document.getElementById('global_bar'),{{
     {{label:'One-Class SVM',data:{svm_imp_js},backgroundColor:C_.svm+'99',borderColor:C_.svm,borderWidth:1,borderRadius:3}},
   ]}},
   options:{{responsive:true,maintainAspectRatio:false,plugins:{{legend:{{position:'top',labels:{{boxWidth:12,color:'#94a3b8'}}}}}},scales:{{x:{{ticks:{{font:{{size:10}},color:'#94a3b8'}}}},y:{{title:{{display:true,text:'Mean |SHAP Value|',color:'#94a3b8'}},ticks:{{color:'#94a3b8'}}}}}}}}
+}});
+
+// === Section 1: Normalized (sum=1 per model) ===
+function normArr(arr){{const s=arr.reduce((a,b)=>a+b,0);return s>0?arr.map(v=>+(v/s).toFixed(4)):arr;}}
+const ifNorm=normArr({if_imp_js}),lofNorm=normArr({lof_imp_js}),svmNorm=normArr({svm_imp_js});
+new Chart(document.getElementById('global_bar_norm'),{{
+  type:'bar',
+  data:{{labels:FL,datasets:[
+    {{label:'Isolation Forest',data:ifNorm,backgroundColor:C_.if+'99',borderColor:C_.if,borderWidth:1,borderRadius:3}},
+    {{label:'Local Outlier Factor',data:lofNorm,backgroundColor:C_.lof+'99',borderColor:C_.lof,borderWidth:1,borderRadius:3}},
+    {{label:'One-Class SVM',data:svmNorm,backgroundColor:C_.svm+'99',borderColor:C_.svm,borderWidth:1,borderRadius:3}},
+  ]}},
+  options:{{responsive:true,maintainAspectRatio:false,plugins:{{legend:{{position:'top',labels:{{boxWidth:12,color:'#94a3b8'}}}},tooltip:{{callbacks:{{label:function(ctx){{return ctx.dataset.label+': '+(ctx.raw*100).toFixed(1)+'%';}}}}}}}},scales:{{x:{{ticks:{{font:{{size:10}},color:'#94a3b8'}}}},y:{{title:{{display:true,text:'Proportion (%)',color:'#94a3b8'}},ticks:{{color:'#94a3b8',callback:function(v){{return(v*100).toFixed(0)+'%';}}}},max:0.3}}}}}}
 }});
 
 // === Section 2 ===
