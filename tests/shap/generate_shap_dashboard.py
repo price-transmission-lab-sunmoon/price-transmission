@@ -358,8 +358,15 @@ table.eval td:first-child {{ text-align:left; font-weight:500; color:var(--text-
         <option value="LOF">Local Outlier Factor</option>
         <option value="SVM">One-Class SVM</option>
       </select>
-      <button id="hm_toggle" style="margin-left:12px;background:rgba(59,130,246,0.15);color:#3b82f6;border:1px solid rgba(59,130,246,0.3);border-radius:4px;padding:4px 12px;font-size:11px;font-family:'JetBrains Mono',monospace;cursor:pointer;">Show: All Months</button>
+      <button id="hm_view_mode" style="margin-left:12px;background:rgba(245,158,11,0.15);color:#f59e0b;border:1px solid rgba(245,158,11,0.3);border-radius:4px;padding:4px 12px;font-size:11px;font-family:'JetBrains Mono',monospace;cursor:pointer;">View: Yearly Summary</button>
+      <button id="hm_toggle" style="margin-left:8px;background:rgba(59,130,246,0.15);color:#3b82f6;border:1px solid rgba(59,130,246,0.3);border-radius:4px;padding:4px 12px;font-size:11px;font-family:'JetBrains Mono',monospace;cursor:pointer;">Filter: All Months</button>
     </h3>
+    <div id="hm_range_bar" style="display:none;margin:12px 0;padding:12px 16px;background:rgba(30,41,59,0.5);border-radius:8px;font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--text-secondary);">
+      Period: <select id="hm_year_start" class="unit-select" style="margin-left:4px;"></select>
+      ~ <select id="hm_year_end" class="unit-select"></select>
+      <button id="hm_range_apply" style="margin-left:8px;background:rgba(16,185,129,0.15);color:#10b981;border:1px solid rgba(16,185,129,0.3);border-radius:4px;padding:3px 10px;font-size:11px;cursor:pointer;">Apply</button>
+      <button id="hm_range_reset" style="margin-left:4px;background:rgba(100,116,139,0.15);color:#94a3b8;border:1px solid rgba(100,116,139,0.3);border-radius:4px;padding:3px 10px;font-size:11px;cursor:pointer;">Reset</button>
+    </div>
     <div style="position:relative;">
       <div class="chart-container tall"><canvas id="heatmap_canvas"></canvas></div>
       <div id="hm_tooltip" style="display:none;position:absolute;background:rgba(17,24,39,0.95);border:1px solid #3b82f6;border-radius:6px;padding:8px 12px;font-family:'JetBrains Mono',monospace;font-size:11px;color:#e2e8f0;pointer-events:none;z-index:10;white-space:nowrap;"></div>
@@ -408,45 +415,125 @@ let tH='<table class="eval"><thead><tr><th>Commodity</th><th>Isolation Forest</t
 for(let i=0;i<ifU.length;i++){{const a=ifU[i],b=lofU[i],c=svmU[i];tH+=`<tr><td>${{a.cid}} ${{a.seg}}</td><td>${{a.top}}</td><td>${{a.pct.toFixed(1)}}%</td><td>${{b.top}}</td><td>${{b.pct.toFixed(1)}}%</td><td>${{c.top}}</td><td>${{c.pct.toFixed(1)}}%</td></tr>`;}}
 tH+='</tbody></table>';document.getElementById('unit_table').innerHTML=tH;
 
-// === Section 3: Heatmap (percentile-clipped, blue-white-red, tooltip, anomaly filter) ===
+// === Section 3: Heatmap ===
 const hmData={{IF:{if_heatmap_js},LOF:{lof_heatmap_js},SVM:{svm_heatmap_js}}};
 const units={units_js};
 const hmUS=document.getElementById('hm_unit'),hmMS=document.getElementById('hm_model');
 const hmToggle=document.getElementById('hm_toggle');
+const hmViewMode=document.getElementById('hm_view_mode');
 const hmTooltip=document.getElementById('hm_tooltip');
+const hmRangeBar=document.getElementById('hm_range_bar');
+const hmYS=document.getElementById('hm_year_start'),hmYE=document.getElementById('hm_year_end');
 units.forEach(u=>{{const o=document.createElement('option');o.value=u;o.textContent=u.replace('_',' ');hmUS.appendChild(o);}});
 
-let hmShowAll=true;
-// Store current heatmap state for tooltip
-let hmState={{mL:0,mT:0,cW:0,cH:0,nD:0,nF:0,dates:[],clipMax:0,features:{{}},filteredIndices:null}};
+let hmIsYearly=true; // true=yearly summary, false=monthly detail
+let hmFilterAnomaly=false;
+let hmRangeStart=null,hmRangeEnd=null;
+let hmState={{mL:0,mT:0,cW:0,cH:0,nD:0,nF:0,dates:[],clipMax:0,features:{{}}}};
 
-hmToggle.addEventListener('click',()=>{{
-  hmShowAll=!hmShowAll;
-  hmToggle.textContent=hmShowAll?'Show: All Months':'Show: Anomaly Months Only';
-  hmToggle.style.background=hmShowAll?'rgba(59,130,246,0.15)':'rgba(16,185,129,0.15)';
-  hmToggle.style.color=hmShowAll?'#3b82f6':'#10b981';
-  hmToggle.style.borderColor=hmShowAll?'rgba(59,130,246,0.3)':'rgba(16,185,129,0.3)';
+hmViewMode.addEventListener('click',()=>{{
+  hmIsYearly=!hmIsYearly;
+  hmViewMode.textContent=hmIsYearly?'View: Yearly Summary':'View: Monthly Detail';
+  hmViewMode.style.background=hmIsYearly?'rgba(245,158,11,0.15)':'rgba(139,92,246,0.15)';
+  hmViewMode.style.color=hmIsYearly?'#f59e0b':'#8b5cf6';
+  hmViewMode.style.borderColor=hmIsYearly?'rgba(245,158,11,0.3)':'rgba(139,92,246,0.3)';
+  hmRangeBar.style.display=hmIsYearly?'none':'block';
   drawHeatmap();
 }});
+
+hmToggle.addEventListener('click',()=>{{
+  hmFilterAnomaly=!hmFilterAnomaly;
+  hmToggle.textContent=hmFilterAnomaly?'Filter: Anomaly Only':'Filter: All Months';
+  hmToggle.style.background=hmFilterAnomaly?'rgba(16,185,129,0.15)':'rgba(59,130,246,0.15)';
+  hmToggle.style.color=hmFilterAnomaly?'#10b981':'#3b82f6';
+  hmToggle.style.borderColor=hmFilterAnomaly?'rgba(16,185,129,0.3)':'rgba(59,130,246,0.3)';
+  drawHeatmap();
+}});
+
+// Populate year dropdowns on unit change
+function populateYears(){{
+  const unit=hmUS.value,model=hmMS.value;
+  const d=hmData[model];if(!d||!d[unit])return;
+  const allDates=d[unit].dates;
+  const years=[...new Set(allDates.map(d=>d.substring(0,4)))].sort();
+  hmYS.innerHTML='';hmYE.innerHTML='';
+  years.forEach(y=>{{
+    const o1=document.createElement('option');o1.value=y;o1.textContent=y;hmYS.appendChild(o1);
+    const o2=document.createElement('option');o2.value=y;o2.textContent=y;hmYE.appendChild(o2);
+  }});
+  hmYS.value=years[0];hmYE.value=years[years.length-1];
+  hmRangeStart=null;hmRangeEnd=null;
+}}
+hmUS.addEventListener('change',()=>{{populateYears();drawHeatmap();}});
+hmMS.addEventListener('change',()=>{{populateYears();drawHeatmap();}});
+document.getElementById('hm_range_apply').addEventListener('click',()=>{{
+  hmRangeStart=hmYS.value;hmRangeEnd=hmYE.value;drawHeatmap();
+}});
+document.getElementById('hm_range_reset').addEventListener('click',()=>{{
+  hmRangeStart=null;hmRangeEnd=null;
+  const years=[...hmYS.options].map(o=>o.value);
+  hmYS.value=years[0];hmYE.value=years[years.length-1];
+  drawHeatmap();
+}});
+
+// Aggregate monthly → yearly (mean |SHAP|)
+function aggregateYearly(dates, features){{
+  const yearMap={{}};
+  dates.forEach((d,i)=>{{
+    const y=d.substring(0,4);
+    if(!yearMap[y])yearMap[y]={{count:0}};
+    yearMap[y].count++;
+    FC.forEach(f=>{{
+      if(!yearMap[y][f])yearMap[y][f]=0;
+      yearMap[y][f]+=Math.abs(features[f][i]);
+    }});
+  }});
+  const years=Object.keys(yearMap).sort();
+  const aggFeatures={{}};
+  FC.forEach(f=>{{aggFeatures[f]=years.map(y=>+(yearMap[y][f]/yearMap[y].count).toFixed(6));}});
+  return {{dates:years,features:aggFeatures}};
+}}
 
 function drawHeatmap(){{
   const unit=hmUS.value,model=hmMS.value;
   const d=hmData[model];if(!d||!d[unit])return;
   const ud=d[unit];
-  let dates=ud.dates,features=ud.features,anomalyIdx=ud.anomaly||[];
+  let dates=ud.dates.slice(),features={{}};
+  FC.forEach(f=>{{features[f]=ud.features[f].slice();}});
+  const anomalyIdx=ud.anomaly||[];
 
-  // Filter to anomaly months only if toggled
-  let filteredIndices=null;
-  if(!hmShowAll&&anomalyIdx.length>0){{
-    filteredIndices=anomalyIdx;
+  // Step 1: anomaly filter
+  if(hmFilterAnomaly&&anomalyIdx.length>0){{
     dates=anomalyIdx.map(i=>ud.dates[i]);
-    features={{}};
     FC.forEach(f=>{{features[f]=anomalyIdx.map(i=>ud.features[f][i]);}});
+  }}
+
+  // Step 2: range filter (monthly mode only)
+  if(!hmIsYearly&&hmRangeStart&&hmRangeEnd){{
+    const filtered=[];
+    dates.forEach((d,i)=>{{
+      const y=d.substring(0,4);
+      if(y>=hmRangeStart&&y<=hmRangeEnd)filtered.push(i);
+    }});
+    const fDates=filtered.map(i=>dates[i]);
+    const fFeatures={{}};
+    FC.forEach(f=>{{fFeatures[f]=filtered.map(i=>features[f][i]);}});
+    dates=fDates;features=fFeatures;
+  }}
+
+  // Step 3: yearly aggregation
+  let displayDates=dates,displayFeatures=features;
+  let isAggregated=false;
+  if(hmIsYearly){{
+    const agg=aggregateYearly(dates,features);
+    displayDates=agg.dates;displayFeatures=agg.features;
+    isAggregated=true;
   }}
 
   // Percentile clipping
   const allVals=[];
-  FC.forEach(f=>features[f].forEach(v=>allVals.push(v)));
+  FC.forEach(f=>displayFeatures[f].forEach(v=>allVals.push(v)));
+  if(allVals.length===0)return;
   allVals.sort((a,b)=>a-b);
   const p2=allVals[Math.floor(allVals.length*0.02)];
   const p98=allVals[Math.floor(allVals.length*0.98)];
@@ -459,11 +546,10 @@ function drawHeatmap(){{
 
   const mL=160,mR=20,mT=30,mB=80;
   const pW=canvas.width-mL-mR,pH=canvas.height-mT-mB;
-  const nD=dates.length,nF=FC.length;
+  const nD=displayDates.length,nF=FC.length;
   const cW=pW/nD,cH=pH/nF;
 
-  // Store state for tooltip
-  hmState={{mL,mT,cW,cH,nD,nF,dates,clipMax,features,filteredIndices}};
+  hmState={{mL,mT,cW,cH,nD,nF,dates:displayDates,clipMax,features:displayFeatures}};
 
   ctx.clearRect(0,0,canvas.width,canvas.height);
 
@@ -478,11 +564,21 @@ function drawHeatmap(){{
 
   // Draw cells
   FC.forEach((f,fi)=>{{
-    features[f].forEach((v,di)=>{{
+    displayFeatures[f].forEach((v,di)=>{{
       ctx.fillStyle=valColor(v);
       ctx.fillRect(mL+di*cW,mT+fi*cH,Math.ceil(cW)+0.5,Math.ceil(cH)+0.5);
     }});
   }});
+
+  // Cell borders for yearly view (cells are wide enough)
+  if(isAggregated&&nD<=40){{
+    ctx.strokeStyle='rgba(30,41,59,0.6)';ctx.lineWidth=0.5;
+    FC.forEach((f,fi)=>{{
+      displayFeatures[f].forEach((v,di)=>{{
+        ctx.strokeRect(mL+di*cW,mT+fi*cH,Math.ceil(cW),Math.ceil(cH));
+      }});
+    }});
+  }}
 
   // Y labels
   ctx.fillStyle='#e2e8f0';ctx.font='11px JetBrains Mono';ctx.textAlign='right';ctx.textBaseline='middle';
@@ -490,33 +586,45 @@ function drawHeatmap(){{
 
   // X labels
   ctx.fillStyle='#94a3b8';ctx.textAlign='center';ctx.textBaseline='top';
-  const maxLabels=hmShowAll?15:Math.min(nD,30);
+  const maxLabels=isAggregated?nD:(nD<=60?nD:15);
   const step=Math.max(1,Math.floor(nD/maxLabels));
   for(let i=0;i<nD;i+=step){{
-    ctx.save();ctx.translate(mL+i*cW+cW/2,mT+pH+8);ctx.rotate(-Math.PI/4);
-    ctx.fillText(dates[i],0,0);ctx.restore();
+    ctx.save();ctx.translate(mL+i*cW+cW/2,mT+pH+8);
+    if(!isAggregated)ctx.rotate(-Math.PI/4);
+    ctx.fillText(displayDates[i],0,0);ctx.restore();
   }}
 
   // Title
-  const modeLabel=hmShowAll?'All Months':'Anomaly Months ('+nD+')';
+  let modeLabel=isAggregated?'Yearly Mean |SHAP|':'Monthly ('+nD+' months)';
+  if(hmFilterAnomaly)modeLabel+=' [Anomaly Only]';
   ctx.fillStyle='#e2e8f0';ctx.font='13px Noto Sans KR';ctx.textAlign='center';ctx.textBaseline='top';
   ctx.fillText(unit.replace('_',' ')+' — '+model+' — '+modeLabel,canvas.width/2,4);
 
   // Legend gradient
   const gW=200,gH=12,gX=(canvas.width-gW)/2,gY=mT+pH+52;
   const grad=ctx.createLinearGradient(gX,0,gX+gW,0);
-  grad.addColorStop(0,'rgb(0,0,255)');grad.addColorStop(0.5,'rgb(255,255,255)');grad.addColorStop(1,'rgb(255,0,0)');
+  if(isAggregated){{
+    grad.addColorStop(0,'rgb(255,255,255)');grad.addColorStop(1,'rgb(255,0,0)');
+  }}else{{
+    grad.addColorStop(0,'rgb(0,0,255)');grad.addColorStop(0.5,'rgb(255,255,255)');grad.addColorStop(1,'rgb(255,0,0)');
+  }}
   ctx.fillStyle=grad;ctx.fillRect(gX,gY,gW,gH);
   ctx.strokeStyle='#64748b';ctx.strokeRect(gX,gY,gW,gH);
 
   ctx.fillStyle='#94a3b8';ctx.font='10px JetBrains Mono';ctx.textAlign='center';ctx.textBaseline='top';
-  ctx.fillText('-'+clipMax.toFixed(2),gX,gY+gH+4);
-  ctx.fillText('0',gX+gW/2,gY+gH+4);
-  ctx.fillText('+'+clipMax.toFixed(2),gX+gW,gY+gH+4);
-  ctx.fillText('SHAP Value (clipped 2nd~98th percentile)',canvas.width/2,gY+gH+18);
+  if(isAggregated){{
+    ctx.fillText('0',gX,gY+gH+4);
+    ctx.fillText(clipMax.toFixed(2),gX+gW,gY+gH+4);
+    ctx.fillText('Mean |SHAP| (yearly aggregated)',canvas.width/2,gY+gH+18);
+  }}else{{
+    ctx.fillText('-'+clipMax.toFixed(2),gX,gY+gH+4);
+    ctx.fillText('0',gX+gW/2,gY+gH+4);
+    ctx.fillText('+'+clipMax.toFixed(2),gX+gW,gY+gH+4);
+    ctx.fillText('SHAP Value (clipped 2nd~98th percentile)',canvas.width/2,gY+gH+18);
+  }}
 }}
 
-// Tooltip on mousemove
+// Tooltip
 document.getElementById('heatmap_canvas').addEventListener('mousemove',(e)=>{{
   const canvas=e.target;
   const rect=canvas.getBoundingClientRect();
@@ -532,11 +640,12 @@ document.getElementById('heatmap_canvas').addEventListener('mousemove',(e)=>{{
     const feat=FC[fi];
     const featLabel=FL[fi];
     const val=s.features[feat][di];
+    const valLabel=hmIsYearly?'Mean |SHAP|: '+val.toFixed(4):'SHAP: '+(val>=0?'+':'')+val.toFixed(4);
+    const valColor=val>=0?'#ef4444':'#3b82f6';
 
     hmTooltip.style.display='block';
-    hmTooltip.innerHTML=`<div style="color:#3b82f6;font-weight:700;margin-bottom:2px">${{date}}</div><div>${{featLabel}}</div><div style="margin-top:4px;font-size:13px;font-weight:700;color:${{val>=0?'#ef4444':'#3b82f6'}}">${{val>=0?'+':''}}${{val.toFixed(4)}}</div>`;
+    hmTooltip.innerHTML=`<div style="color:#3b82f6;font-weight:700;margin-bottom:2px">${{date}}</div><div>${{featLabel}}</div><div style="margin-top:4px;font-size:13px;font-weight:700;color:${{valColor}}">${{valLabel}}</div>`;
 
-    // Position tooltip
     let tx=e.clientX-rect.left+16;
     let ty=e.clientY-rect.top-10;
     if(tx+180>canvas.width)tx=tx-196;
@@ -552,7 +661,9 @@ document.getElementById('heatmap_canvas').addEventListener('mouseleave',()=>{{
   hmTooltip.style.display='none';
 }});
 
-hmUS.addEventListener('change',drawHeatmap);hmMS.addEventListener('change',drawHeatmap);
+populateYears();
+hmUS.addEventListener('change',()=>{{populateYears();drawHeatmap();}});
+hmMS.addEventListener('change',drawHeatmap);
 setTimeout(drawHeatmap,100);
 </script>
 </body>
