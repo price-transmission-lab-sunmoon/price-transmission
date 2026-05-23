@@ -26,6 +26,8 @@ data/output/
 !data/output/.gitkeep
 
 tests/phase7_ml/results/
+tests/shap/results
+
 
 # === Jupyter 체크포인트 ===
 .ipynb_checkpoints/
